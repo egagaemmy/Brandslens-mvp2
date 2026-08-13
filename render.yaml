@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: brandslens-api
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false          # you paste this in Render's dashboard, not committed to git
+      - key: DATABASE_URL
+        value: sqlite:///./brandslens_mvp.db
+      - key: FRONTEND_ORIGIN
+        value: "*"           # tighten to your real frontend URL once you have one — see DEPLOY.md
