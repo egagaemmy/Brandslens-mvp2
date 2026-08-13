@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PAYSTACK_SECRET_KEY, FRONTEND_ORIGIN
-from ..models import Organization, BillingEvent, now_utc
+from ..models import Organization, OrgMember, BillingEvent, now_utc
 
 log = logging.getLogger("billing")
 
@@ -146,6 +146,10 @@ def _flag_payment_issue(db: Session, org_id: str) -> None:
     if org:
         org.billing_status = "past_due"
         db.commit()
+        owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org.id, OrgMember.role == "owner"))
+        if owner:
+            from .mailer import send_payment_failed
+            send_payment_failed(owner.email, owner.name, org.name)
 
 
 def _downgrade(db: Session, org_id: str) -> None:

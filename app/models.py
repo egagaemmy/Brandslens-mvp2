@@ -50,7 +50,9 @@ class Organization(Base):
     billing_customer_id: Mapped[str] = mapped_column(String(120), default="")
     billing_subscription_id: Mapped[str] = mapped_column(String(120), default="")
     billing_status: Mapped[str] = mapped_column(String(20), default="trialing")
-    # 'trialing' | 'active' | 'past_due' | 'cancelled' — see services/billing.py
+    # 'trialing' | 'active' | 'past_due' | 'expired' | 'cancelled' — see services/billing.py
+    trial_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    trial_reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     plan_activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     plan_cancelled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     read_only_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -77,6 +79,14 @@ class OrgMember(Base):
     invited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # ---- Profile / KYC-style fields, editable after signup ----
+    avatar_base64: Mapped[str] = mapped_column(Text, default="")   # data URL, e.g. "data:image/png;base64,..."
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    address: Mapped[str] = mapped_column(Text, default="")
+    city: Mapped[str] = mapped_column(String(120), default="")
+    country: Mapped[str] = mapped_column(String(120), default="")
+    job_title: Mapped[str] = mapped_column(String(160), default="")
 
     organization: Mapped["Organization"] = relationship(back_populates="members")
 

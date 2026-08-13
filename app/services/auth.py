@@ -31,19 +31,28 @@ def verify_password(raw: str, hashed: str) -> bool:
     return bool(hashed) and argon2.verify(raw, hashed)
 
 
+TRIAL_DAYS = 3
+
+
 def signup(db: Session, company: str, sector: str, plan: str,
           name: str, email: str, password: str) -> tuple[OrgMember, str]:
     """Creates the organization, its first member (role=owner, active
-    immediately), a starter workspace, and returns a live session token."""
+    immediately), a starter workspace, and returns a live session token.
+
+    Product policy: every signup starts on Professional with a 3-day free
+    trial — the `plan` argument is accepted for API compatibility but
+    deliberately ignored here, so nobody can start on a higher tier without
+    actually paying for it first."""
     if len(password) < 8:
         raise AuthError("Password must be at least 8 characters.")
     if db.scalar(select(OrgMember).where(OrgMember.email == email.lower())):
         raise AuthError("An account with this email already exists. Try logging in instead.")
 
-    plan = plan if plan in PLAN_WORKSPACE_LIMIT else "professional"
+    plan = "professional"
     org = Organization(name=company, sector=sector, plan=plan,
                        workspace_limit=PLAN_WORKSPACE_LIMIT[plan],
-                       keyword_limit=PLAN_KEYWORD_LIMIT[plan], billing_status="trialing")
+                       keyword_limit=PLAN_KEYWORD_LIMIT[plan], billing_status="trialing",
+                       trial_ends_at=now_utc() + timedelta(days=TRIAL_DAYS))
     db.add(org)
     db.flush()
 
@@ -167,3 +176,21 @@ def add_workspace(db: Session, actor: OrgMember, name: str, sector: str) -> Work
     db.add(ws)
     db.commit()
     return ws
+
+
+MAX_AVATAR_BASE64_CHARS = 900_000  # ~650KB decoded — plenty for a profile photo, small enough to keep in a text column sanely
+
+def update_profile(db: Session, member: OrgMember, **fields) -> OrgMember:
+    """Anyone can edit their own profile — no role restriction, since this is
+    personal data about the member themselves, not an organization setting."""
+    if "avatar_base64" in fields and fields["avatar_base64"]:
+        avatar = fields["avatar_base64"]
+        if not avatar.startswith("data:image/"):
+            raise AuthError("Profile picture must be a valid image.")
+        if len(avatar) > MAX_AVATAR_BASE64_CHARS:
+            raise AuthError("That image is too large — please use something under ~500KB.")
+    for field in ("name", "phone", "address", "city", "country", "job_title", "avatar_base64"):
+        if field in fields and fields[field] is not None:
+            setattr(member, field, fields[field])
+    db.commit()
+    return member

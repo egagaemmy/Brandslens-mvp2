@@ -69,6 +69,39 @@ def sweep_sla() -> None:
         db.close()
 
 
+def check_trials() -> None:
+    """Runs regularly: sends a one-time reminder ~24h before a trial ends,
+    and flips any organization whose trial has genuinely expired to
+    'expired' — which app/deps.py's active_member dependency then enforces
+    on every data request, locking the product until they subscribe."""
+    from datetime import timedelta
+    from .models import Organization, OrgMember, aware, now_utc
+    from .services.mailer import send_trial_reminder, send_trial_expired
+    db = SessionLocal()
+    try:
+        trialing = db.scalars(select(Organization).where(Organization.billing_status == "trialing")).all()
+        now = now_utc()
+        for org in trialing:
+            if not org.trial_ends_at:
+                continue
+            ends = aware(org.trial_ends_at)
+            owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org.id, OrgMember.role == "owner"))
+            if not owner:
+                continue
+            if ends < now:
+                org.billing_status = "expired"
+                db.commit()
+                send_trial_expired(owner.email, owner.name, org.name)
+                log.info("Trial expired for org=%s (%s)", org.id, org.name)
+            elif ends - now <= timedelta(hours=24) and not org.trial_reminder_sent:
+                org.trial_reminder_sent = True
+                db.commit()
+                send_trial_reminder(owner.email, owner.name, org.name, (ends - now).total_seconds() / 3600)
+                log.info("Sent trial-ending reminder for org=%s (%s)", org.id, org.name)
+    finally:
+        db.close()
+
+
 def start_background_loops() -> None:
     db = SessionLocal()
     channel_map = {ws.id: (ws.telegram_channels or []) for ws in db.scalars(select(Workspace)).all()}
@@ -93,6 +126,7 @@ def main() -> None:
     sched.add_job(run_collector, "interval", minutes=CADENCE_X, args=("x", x_collector.collect), id="x")  # no-ops if X_ENABLED=false
     sched.add_job(flush_telegram, "interval", minutes=CADENCE_TELEGRAM_FLUSH, id="tg-flush")
     sched.add_job(sweep_sla, "interval", minutes=CADENCE_SLA_SWEEP, id="sla-sweep")
+    sched.add_job(check_trials, "interval", minutes=60, id="trial-check")
     sched.start()
     start_background_loops()
     log.info("MVP worker started — news %sm, nairaland %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm",

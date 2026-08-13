@@ -17,10 +17,10 @@ from sqlalchemy.orm import Session
 
 from .db import get_db, init_db
 from .config import FRONTEND_ORIGIN, APP_NAME
-from .deps import current_member, require_role, owned_workspace
+from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
-                     MediaRoomCase, MediaRoomAudit, now_utc)
+                     MediaRoomCase, MediaRoomAudit, now_utc, aware)
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -32,6 +32,21 @@ app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_ORIGIN] if FRONTEND_O
 
 COLLECTORS = [news_collector, nairaland_collector, reddit_collector, youtube_collector, domain_collector, x_collector]
 ROLE_LABEL = {"owner": "Owner", "lead": "Team Lead", "member": "Team Member"}
+
+# The full source catalog — shown to users so they know exactly where mentions
+# come from. "active" is computed per-request from what's actually configured,
+# not hardcoded, so this list is always honest about real system state.
+SOURCE_CATALOG = [
+    {"key": "news", "label": "News (GDELT + RSS)", "requires_key": False},
+    {"key": "nairaland", "label": "Nairaland", "requires_key": False},
+    {"key": "domain", "label": "Look-alike Domain Watch", "requires_key": False},
+    {"key": "reddit", "label": "Reddit", "requires_key": True, "env": "REDDIT_CLIENT_ID"},
+    {"key": "youtube", "label": "YouTube", "requires_key": True, "env": "YOUTUBE_API_KEY"},
+    {"key": "telegram", "label": "Telegram channels", "requires_key": True, "env": "TELEGRAM_API_ID"},
+    {"key": "x", "label": "X (Twitter)", "requires_key": True, "env": "X_ENABLED", "note": "Off until enabled — see architecture blueprint"},
+    {"key": "facebook", "label": "Facebook & Instagram", "requires_key": False, "note": "Not yet available — pending Meta app review"},
+    {"key": "tiktok", "label": "TikTok", "requires_key": False, "note": "Not yet available"},
+]
 
 
 @app.on_event("startup")
@@ -45,7 +60,6 @@ def _startup() -> None:
 class SignupBody(BaseModel):
     company: str
     sector: str = "General"
-    plan: str = "professional"
     name: str
     email: str
     password: str
@@ -54,7 +68,7 @@ class SignupBody(BaseModel):
 @app.post("/api/auth/signup")
 def signup(body: SignupBody, db: Session = Depends(get_db)) -> dict:
     try:
-        member, token = auth.signup(db, body.company, body.sector, body.plan, body.name, body.email, body.password)
+        member, token = auth.signup(db, body.company, body.sector, "professional", body.name, body.email, body.password)
     except AuthError as e:
         raise HTTPException(422, str(e))
     ws = db.scalar(select(Workspace).where(Workspace.organization_id == member.organization_id))
@@ -85,7 +99,9 @@ def logout(request: Request, db: Session = Depends(get_db)) -> dict:
 
 
 def _member_dict(m: OrgMember) -> dict:
-    return {"id": m.id, "email": m.email, "name": m.name, "role": m.role, "role_label": ROLE_LABEL[m.role]}
+    return {"id": m.id, "email": m.email, "name": m.name, "role": m.role, "role_label": ROLE_LABEL[m.role],
+            "avatar_base64": m.avatar_base64, "phone": m.phone, "address": m.address,
+            "city": m.city, "country": m.country, "job_title": m.job_title}
 
 
 # ==================================================================
@@ -115,7 +131,7 @@ def list_members(member: OrgMember = Depends(current_member), db: Session = Depe
 
 
 @app.delete("/api/team/members/{target_id}")
-def remove_member_route(target_id: str, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+def remove_member_route(target_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     try:
         auth.remove_member(db, member, target_id)
     except AuthError as e:
@@ -146,7 +162,7 @@ class NewWorkspaceBody(BaseModel):
 
 
 @app.post("/api/workspaces")
-def create_workspace(body: NewWorkspaceBody, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+def create_workspace(body: NewWorkspaceBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     try:
         ws = auth.add_workspace(db, member, body.name, body.sector)
     except AuthError as e:
@@ -155,7 +171,7 @@ def create_workspace(body: NewWorkspaceBody, member: OrgMember = Depends(current
 
 
 @app.get("/api/workspaces")
-def list_workspaces(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> list[dict]:
+def list_workspaces(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> list[dict]:
     workspaces = db.scalars(select(Workspace).where(Workspace.organization_id == member.organization_id)).all()
     return [{"id": w.id, "name": w.name, "sector": w.sector} for w in workspaces]
 
@@ -210,7 +226,7 @@ class StatusBody(BaseModel):
 
 
 @app.patch("/api/incidents/{incident_id}/status")
-def set_status(incident_id: str, body: StatusBody, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+def set_status(incident_id: str, body: StatusBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     if body.status not in ("open", "in review", "resolved", "dismissed"):
         raise HTTPException(422, "Invalid status")
     inc = db.get(Incident, incident_id)
@@ -287,7 +303,7 @@ class TransitionBody(BaseModel):
 
 
 @app.patch("/api/media-room/cases/{case_id}/state")
-def transition_case(case_id: str, body: TransitionBody, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+def transition_case(case_id: str, body: TransitionBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     case = _case_in_org(case_id, member, db)
     try:
         media_room.transition(db, case, body.new_state, member.email, body.detail)
@@ -310,7 +326,7 @@ class DraftBody(BaseModel):
 
 
 @app.post("/api/media-room/cases/{case_id}/statements")
-def draft_statement_route(case_id: str, body: DraftBody, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+def draft_statement_route(case_id: str, body: DraftBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     case = _case_in_org(case_id, member, db)
     stmt = media_room.draft_statement(db, case, body.subject, body.body, body.recipients, member.email)
     return {"id": stmt.id, "version": stmt.version}
@@ -323,12 +339,12 @@ class AiDraftBody(BaseModel):
 
 
 @app.post("/api/media-room/ai-draft")
-def ai_draft(body: AiDraftBody, member: OrgMember = Depends(current_member)) -> dict:
+def ai_draft(body: AiDraftBody, member: OrgMember = Depends(active_member)) -> dict:
     return {"draft": media_room.draft_statement_ai(body.brand_name, body.incident_summary, body.template_type)}
 
 
 @app.get("/api/media-room/cases/{case_id}/audit")
-def get_audit(case_id: str, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+def get_audit(case_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     case = _case_in_org(case_id, member, db)
     verified = media_room.verify_chain(db, case.id)
     rows = db.scalars(select(MediaRoomAudit).where(MediaRoomAudit.case_id == case.id).order_by(MediaRoomAudit.at)).all()
@@ -379,11 +395,19 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)) -> d
         raise HTTPException(400, "Invalid signature")
 
 
+def _trial_dict(org: Organization) -> dict:
+    remaining_hours = None
+    if org.trial_ends_at:
+        remaining_hours = round((aware(org.trial_ends_at) - now_utc()).total_seconds() / 3600, 1)
+    return {"trial_ends_at": org.trial_ends_at.isoformat() if org.trial_ends_at else None,
+           "trial_remaining_hours": remaining_hours}
+
+
 @app.get("/api/billing/status")
 def billing_status(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
     org = db.get(Organization, member.organization_id)
     return {"plan": org.plan, "status": org.billing_status, "workspace_limit": org.workspace_limit,
-           "keyword_limit": org.keyword_limit}
+           "keyword_limit": org.keyword_limit, **_trial_dict(org)}
 
 
 @app.get("/api/me")
@@ -393,9 +417,50 @@ def get_me(member: OrgMember = Depends(current_member), db: Session = Depends(ge
     return {
         "member": _member_dict(member),
         "organization": {"id": org.id, "name": org.name, "plan": org.plan, "billing_status": org.billing_status,
-                         "workspace_limit": org.workspace_limit, "keyword_limit": org.keyword_limit},
+                         "workspace_limit": org.workspace_limit, "keyword_limit": org.keyword_limit, **_trial_dict(org)},
         "workspaces": [{"id": w.id, "name": w.name, "sector": w.sector} for w in workspaces],
     }
+
+
+# ==================================================================
+# PROFILE — every member can edit their own, including a KYC-style set of
+# details (photo, phone, address, city, country, job title).
+# ==================================================================
+class ProfileUpdateBody(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    city: str | None = None
+    country: str | None = None
+    job_title: str | None = None
+    avatar_base64: str | None = None   # a data: URL, e.g. "data:image/png;base64,iVBOR..."
+
+
+@app.patch("/api/me/profile")
+def update_my_profile(body: ProfileUpdateBody, member: OrgMember = Depends(current_member),
+                      db: Session = Depends(get_db)) -> dict:
+    try:
+        auth.update_profile(db, member, **body.model_dump(exclude_unset=True))
+    except AuthError as e:
+        raise HTTPException(422, str(e))
+    return {"ok": True, "member": _member_dict(member)}
+
+
+# ==================================================================
+# SOURCES — full transparency on where mentions come from
+# ==================================================================
+@app.get("/api/sources")
+def list_sources() -> list[dict]:
+    import os
+    out = []
+    for s in SOURCE_CATALOG:
+        active = True
+        if s.get("requires_key"):
+            active = bool(os.environ.get(s.get("env", ""), "")) and os.environ.get(s.get("env", ""), "").lower() != "false"
+        if s["key"] in ("facebook", "tiktok"):
+            active = False
+        out.append({"key": s["key"], "label": s["label"], "active": active, "note": s.get("note", "")})
+    return out
 
 
 @app.get("/api/health")

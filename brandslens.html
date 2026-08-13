@@ -323,6 +323,47 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
 .dr-meta .m-lbl{font-size:9.5px;letter-spacing:.08em;color:var(--faint);text-transform:uppercase;font-weight:700}
 .dr-meta .m-val{font-size:13.5px;font-weight:700;margin-top:2px}
 .dr-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:22px}
+
+/* ============ TRIAL BANNER ============ */
+.trial-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#FFFBEB,#FFF7ED);border:1px solid #FCD34D;border-radius:12px;padding:12px 18px;margin-bottom:18px}
+.trial-banner.urgent{background:linear-gradient(135deg,#FEF2F2,#FEF2F2);border-color:#FCA5A5}
+.trial-banner b{color:var(--amber-dark)}
+.trial-banner.urgent b{color:var(--red)}
+.trial-banner p{font-size:12.5px;color:var(--slate);margin-top:2px}
+
+/* ============ PAYWALL ============ */
+.paywall-wrap{min-height:100vh;background:var(--navy-dark);display:flex;align-items:center;justify-content:center;padding:40px}
+.paywall-card{max-width:680px;text-align:center;color:#fff}
+.paywall-card svg{margin-bottom:22px}
+.paywall-card h2{font-family:var(--serif);font-size:34px;margin-bottom:12px}
+.paywall-card .sub{color:rgba(255,255,255,.6);font-size:15px;margin-bottom:34px}
+.paywall-plans{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:26px}
+.paywall-plan{background:rgba(255,255,255,.04);border:1.5px solid rgba(255,255,255,.12);border-radius:14px;padding:22px 16px}
+.paywall-plan.featured{border-color:var(--amber);background:rgba(245,158,11,.08)}
+.paywall-plan h4{font-family:var(--serif);font-size:18px;margin-bottom:6px}
+.paywall-plan .amt{font-family:var(--serif);font-size:26px;color:var(--amber);margin-bottom:12px}
+
+/* ============ PROFILE ============ */
+.avatar-upload{display:flex;align-items:center;gap:20px;margin-bottom:24px}
+.avatar-preview{width:84px;height:84px;border-radius:16px;background:var(--inset);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:32px;color:var(--slate);overflow:hidden;flex-shrink:0;border:1.5px solid var(--line)}
+.avatar-preview img{width:100%;height:100%;object-fit:cover}
+
+/* ============ SOURCES ============ */
+.source-card{display:flex;align-items:center;gap:14px;padding:16px;border:1.5px solid var(--line);border-radius:12px;margin-bottom:10px}
+.source-card .sc-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.source-card .sc-dot.active{background:var(--green);box-shadow:0 0 8px var(--green)}
+.source-card .sc-dot.inactive{background:var(--faint)}
+.source-card .sc-name{font-weight:700;font-size:13.5px}
+.source-card .sc-note{font-size:11.5px;color:var(--faint);margin-top:2px}
+.source-card .sc-badge{font-size:10px;font-weight:700;padding:4px 10px;border-radius:12px;text-transform:uppercase;margin-left:auto;flex-shrink:0}
+.source-card .sc-badge.active{background:#ECFDF5;color:var(--green)}
+.source-card .sc-badge.inactive{background:var(--inset);color:var(--faint)}
+
+/* ============ CLICKABLE / COPYABLE MENTION LINKS ============ */
+.mention-link{color:var(--navy);text-decoration:none;border-bottom:1px dotted var(--line)}
+.mention-link:hover{color:var(--amber-dark);border-bottom-color:var(--amber)}
+.copy-link-btn{background:var(--inset);border-radius:6px;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;color:var(--slate);flex-shrink:0}
+.copy-link-btn:hover{background:var(--line)}
 </style>
 </head>
 <body>
@@ -569,18 +610,34 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
           <select id="suSector"><option>Financial Services</option><option>Fintech / Payments</option><option>FMCG &amp; Food</option>
             <option>Energy &amp; Capital Markets</option><option>Telecommunications</option><option>Industrial Services</option>
             <option>Insurance</option><option>Real Estate</option><option>Government / Public Sector</option><option>Other</option></select></div>
-        <div class="form-field"><label>Plan</label>
-          <div class="plan-pick">
-            <label><input type="radio" name="suPlan" value="professional"><span>Professional</span></label>
-            <label><input type="radio" name="suPlan" value="corp_growth" checked><span>Corp. Growth</span></label>
-            <label><input type="radio" name="suPlan" value="enterprise"><span>Enterprise</span></label>
-          </div></div>
-        <button class="btn btn-amber btn-block" id="suSubmit">Create workspace</button>
+        <div class="card" style="background:#FFFBEB;border-color:#FCD34D;padding:14px;margin-bottom:16px">
+          <b style="color:var(--amber-dark);font-size:12.5px">3-day free trial · Professional plan</b>
+          <p style="font-size:11.5px;color:var(--slate);margin-top:3px">No card required. Upgrade anytime from Billing once you're ready.</p>
+        </div>
+        <button class="btn btn-amber btn-block" id="suSubmit">Start my free trial</button>
         <div class="auth-foot">Already have an account? <a href="#" id="toLogin" style="color:var(--amber-dark);font-weight:700">Log in</a></div>
         <div class="auth-foot"><a href="#" id="suToLanding" style="color:var(--slate)">← Back to homepage</a></div>
       </div>
     </div>
   </div>
+</div>
+
+<!-- ================= PAYWALL (trial expired) ================= -->
+<div class="screen" id="screen-paywall">
+  <div class="paywall-wrap"><div class="paywall-card">
+    <svg width="52" height="52"><use href="#lensMark"/></svg>
+    <h2>Your free trial has ended</h2>
+    <p class="sub">Your data is safe and waiting — subscribe to pick up right where you left off.</p>
+    <div class="paywall-plans">
+      <div class="paywall-plan"><h4>Professional</h4><div class="amt">$1,500<span style="font-size:12px">/yr</span></div>
+        <button class="btn btn-outline btn-block btn-sm" data-paywall-checkout="professional">Subscribe</button></div>
+      <div class="paywall-plan featured"><h4>Corporate Growth</h4><div class="amt">$2,500<span style="font-size:12px">/yr</span></div>
+        <button class="btn btn-amber btn-block btn-sm" data-paywall-checkout="corp_growth">Subscribe</button></div>
+      <div class="paywall-plan"><h4>Enterprise</h4><div class="amt">$3,500<span style="font-size:12px">/yr</span></div>
+        <button class="btn btn-outline btn-block btn-sm" data-paywall-checkout="enterprise">Subscribe</button></div>
+    </div>
+    <button class="btn btn-ghost-dark btn-sm" id="paywallLogout">Log out</button>
+  </div></div>
 </div>
 
 <!-- ================= ONBOARDING ================= -->
@@ -611,6 +668,8 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
     <button class="navlink" data-target="team"><span class="ic">◌</span>Team</button>
 
     <div class="nav-label">Workspace</div>
+    <button class="navlink" data-target="sources"><span class="ic">◎</span>Sources</button>
+    <button class="navlink" data-target="profile"><span class="ic">☺</span>Profile</button>
     <button class="navlink" data-target="settings"><span class="ic">⚙</span>Settings</button>
     <button class="navlink" data-target="billing"><span class="ic">◆</span>Billing</button>
 
@@ -629,9 +688,12 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
           <span style="font-size:10px;color:var(--faint);font-weight:700">WORKSPACE</span>
           <select id="wsSel"></select>
         </div>
+        <button class="btn btn-navy btn-sm" id="runScanBtn">▶ Run Scan Now</button>
         <button class="btn btn-outline btn-sm" id="newWsBtn">+ New workspace</button>
       </div>
     </div>
+    <div id="scanStatusBanner" style="display:none;margin-bottom:16px"></div>
+    <div id="trialBanner" style="display:none"></div>
 
     <!-- DASHBOARD -->
     <section data-tab="dashboard" class="active">
@@ -666,7 +728,7 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
           <button class="btn btn-outline btn-sm" id="refreshLogBtn">↻ Refresh</button>
         </div>
         <div class="tbl-wrap"><table>
-          <thead><tr><th>Ref</th><th>Severity</th><th>Title</th><th>Platform</th><th>Status</th><th>Posted</th></tr></thead>
+          <thead><tr><th>Ref</th><th>Severity</th><th>Title</th><th>Platform</th><th>Link</th><th>Status</th><th>Posted</th></tr></thead>
           <tbody id="logBody"></tbody></table>
           <div class="empty" id="logEmpty" style="display:none">No incidents match the current filters.</div></div>
       </div>
@@ -716,6 +778,40 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
           <div class="form-field"><label>Role</label><select id="tmRole"></select></div>
           <button class="btn btn-navy btn-block" id="tmInviteBtn">Send Invite</button>
         </div>
+      </div>
+    </section>
+
+    <!-- SOURCES -->
+    <section data-tab="sources">
+      <div class="card">
+        <h3>Where your mentions come from <span class="h-sub">live, honest status — not marketing claims</span></h3>
+        <p style="font-size:12.5px;color:var(--slate);margin-bottom:18px">Every source below is either genuinely active right now, or clearly marked as not yet connected. Nothing here is exaggerated.</p>
+        <div id="sourcesList"></div>
+      </div>
+    </section>
+
+    <!-- PROFILE -->
+    <section data-tab="profile">
+      <div class="card" style="max-width:560px">
+        <h3>Your Profile</h3>
+        <div class="avatar-upload">
+          <div class="avatar-preview" id="avatarPreview">?</div>
+          <div>
+            <input type="file" accept="image/*" id="avatarFileInput" style="display:none">
+            <button class="btn btn-outline btn-sm" id="avatarUploadBtn">Upload photo</button>
+            <div style="font-size:11px;color:var(--faint);margin-top:6px">JPG or PNG, under ~500KB</div>
+          </div>
+        </div>
+        <div class="form-field"><label>Full name</label><input id="pfName"></div>
+        <div class="form-field"><label>Email</label><input id="pfEmail" disabled></div>
+        <div class="form-field"><label>Job title</label><input id="pfJobTitle" placeholder="e.g. Head of Communications"></div>
+        <div class="form-field"><label>Phone</label><input id="pfPhone" placeholder="+234…"></div>
+        <div class="form-field"><label>Address</label><input id="pfAddress" placeholder="Street address"></div>
+        <div class="grid g2">
+          <div class="form-field"><label>City</label><input id="pfCity"></div>
+          <div class="form-field"><label>Country</label><input id="pfCountry"></div>
+        </div>
+        <button class="btn btn-navy btn-block" id="pfSaveBtn" style="margin-top:6px">Save Profile</button>
       </div>
     </section>
 
@@ -790,6 +886,7 @@ async function api(path, opts = {}) {
   if (opts.raw) return res; // for file downloads
   let data = {};
   try { data = await res.json(); } catch (e) {}
+  if (res.status === 402 && !opts.skipPaywall) { showScreen("screen-paywall"); throw new Error(data.detail || "Trial expired"); }
   if (!res.ok) throw new Error(data.detail || ("Request failed (" + res.status + ")"));
   return data;
 }
@@ -827,12 +924,11 @@ async function bootstrapSession() {
 $("#suSubmit").onclick = async () => {
   const name = $("#suName").value.trim(), company = $("#suCompany").value.trim(),
         email = $("#suEmail").value.trim(), pass = $("#suPass").value, sector = $("#suSector").value;
-  const plan = document.querySelector('input[name="suPlan"]:checked').value;
   const err = $("#suErr"); err.style.display = "none";
   if (!name || !company || !email || !pass) { err.textContent = "Please fill in your name, company name, email and password."; err.style.display = "block"; return; }
   if (pass.length < 8) { err.textContent = "Password must be at least 8 characters."; err.style.display = "block"; return; }
   try {
-    const data = await api("/api/auth/signup", { method: "POST", body: { company, sector, plan, name, email, password: pass } });
+    const data = await api("/api/auth/signup", { method: "POST", body: { company, sector, name, email, password: pass } });
     saveToken(data.token);
     SESSION = { token: data.token, member: data.member };
     WORKSPACES = [{ id: data.workspace_id, name: company, sector }];
@@ -857,6 +953,29 @@ $("#liSubmit").onclick = async () => {
 };
 
 $("#logoutBtn").onclick = () => { clearToken(); SESSION = null; showScreen("screen-landing"); toast("Logged out", "See you again soon"); };
+$("#paywallLogout").onclick = () => { clearToken(); SESSION = null; showScreen("screen-landing"); };
+document.querySelectorAll("[data-paywall-checkout]").forEach(b => b.onclick = async () => {
+  try {
+    const data = await api("/api/billing/checkout", { method: "POST", skipPaywall: true,
+      body: { plan: b.dataset.paywallCheckout, cycle: "annual", provider: "stripe" } });
+    if (data.checkout_url) window.location.href = data.checkout_url;
+  } catch (e) { toast("Billing not connected yet", e.message, "warn"); }
+});
+
+function renderTrialBanner() {
+  const banner = $("#trialBanner");
+  if (!SESSION.organization || SESSION.organization.billing_status !== "trialing" || SESSION.organization.trial_remaining_hours == null) {
+    banner.style.display = "none"; return;
+  }
+  const hrs = SESSION.organization.trial_remaining_hours;
+  const urgent = hrs <= 24;
+  const label = hrs <= 1 ? "less than an hour" : hrs < 24 ? `${Math.round(hrs)} hours` : `${Math.round(hrs / 24)} day${Math.round(hrs/24)===1?"":"s"}`;
+  banner.style.display = "block";
+  banner.innerHTML = `<div class="trial-banner ${urgent ? "urgent" : ""}">
+    <div><b>${label} left in your free trial</b><p>Subscribe now to keep monitoring without interruption.</p></div>
+    <button class="btn ${urgent ? "btn-navy" : "btn-outline"} btn-sm" onclick="switchTab('billing')">Upgrade Now</button>
+  </div>`;
+}
 
 function runOnboarding() {
   showScreen("screen-onboarding");
@@ -876,12 +995,15 @@ async function enterApp() {
   showScreen("screen-app");
   $("#sideUserName").textContent = SESSION.member.name;
   $("#sideUserEmail").textContent = SESSION.member.email;
-  $("#sideAvatar").textContent = SESSION.member.name.charAt(0).toUpperCase();
+  $("#sideAvatar").innerHTML = SESSION.member.avatar_base64
+    ? `<img src="${SESSION.member.avatar_base64}" style="width:100%;height:100%;object-fit:cover;border-radius:9px">`
+    : SESSION.member.name.charAt(0).toUpperCase();
   $("#acctCompany").value = SESSION.organization ? SESSION.organization.name : "";
   $("#acctEmail").value = SESSION.member.email;
   $("#acctRole").value = ROLE_LABEL[SESSION.member.role];
   renderWorkspaceSelector();
   applyPlanChrome();
+  renderTrialBanner();
   await switchTab("dashboard");
 }
 function renderWorkspaceSelector() {
@@ -894,6 +1016,29 @@ function applyPlanChrome() {
   $("#sidePlanName").textContent = PLAN_LABEL[SESSION.organization.plan] + " plan";
   $("#sidePlanUsage").textContent = SESSION.organization.billing_status === "trialing" ? "Free trial" : SESSION.organization.billing_status;
 }
+$("#runScanBtn").onclick = async () => {
+  if (!ACTIVE_WS) { toast("No workspace selected", "Create or select a workspace first", "warn"); return; }
+  const btn = $("#runScanBtn"), banner = $("#scanStatusBanner");
+  btn.disabled = true; btn.textContent = "⏳ Scanning…";
+  banner.style.display = "block";
+  banner.innerHTML = `<div class="card" style="background:#FFFBEB;border-color:#FCD34D">
+    <b style="color:var(--amber-dark)">Scan started</b>
+    <p style="font-size:12.5px;color:var(--slate);margin-top:4px">Checking every configured source (news, forums, domain watch, and any others you've set up in Settings). This can take up to a minute — new/free sources like RSS and Nairaland run first; sources needing an API key are skipped silently if unconfigured. Results will appear below automatically.</p>
+  </div>`;
+  try {
+    await api(`/api/scan/${ACTIVE_WS}`, { method: "POST" });
+    setTimeout(async () => {
+      btn.disabled = false; btn.textContent = "▶ Run Scan Now";
+      banner.style.display = "none";
+      await switchTab(currentTab);
+      toast("Scan complete", "Dashboard refreshed with the latest results", "good");
+    }, 12000);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "▶ Run Scan Now";
+    banner.style.display = "none";
+    toast("Scan failed to start", e.message, "bad");
+  }
+};
 $("#newWsBtn").onclick = async () => {
   if (SESSION.member.role === "member") { toast("Owners and Team Leads only", "Ask your account Owner to add a workspace", "warn"); return; }
   const name = prompt("Name of the new brand or client workspace:"); if (!name) return;
@@ -911,6 +1056,7 @@ const TAB_TITLES = {
   dashboard: ["Dashboard", "Monitoring overview"], analytics: ["Analytics", "Charts across sentiment, platform and time"],
   log: ["Incident Log", "Every tracked signal for this workspace"], mediaroom: ["Media Room", "Detection to resolution, on the record"],
   reports: ["Reports", "Branded PDF and Excel, generated on demand"], team: ["Team", "Manage who has access to this account"],
+  sources: ["Sources", "Where your mentions actually come from"], profile: ["Profile", "Your personal details"],
   settings: ["Settings", "Keywords, domains and sources"], billing: ["Billing & Plan", "Manage your subscription"],
 };
 async function switchTab(tab) {
@@ -924,6 +1070,8 @@ async function switchTab(tab) {
   if (tab === "mediaroom") await renderMediaRoom();
   if (tab === "reports") await renderReports();
   if (tab === "team") await renderTeam();
+  if (tab === "sources") await renderSources();
+  if (tab === "profile") await renderProfile();
   if (tab === "settings") await renderSettings();
   if (tab === "billing") await renderBilling();
 }
@@ -968,12 +1116,26 @@ async function renderDashboard() {
 
   const box = $("#latestFeed");
   box.innerHTML = incidents.slice(0, 10).map(i => `
-    <div style="display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid #F1F5F9;cursor:pointer" data-inc="${i.id}">
+    <div style="display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid #F1F5F9" data-inc="${i.id}">
       <span style="width:8px;height:8px;border-radius:50%;background:${SEV_COLOR[i.sev]||'#94A3B8'};flex-shrink:0"></span>
       <span style="font-family:monospace;font-size:11px;color:var(--slate);width:90px">${i.ref}</span>
-      <span style="flex:1;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.title)}</span>
+      ${i.url
+        ? `<a href="${esc(i.url)}" target="_blank" rel="noopener" class="mention-link" style="flex:1;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.title)}</a>`
+        : `<span style="flex:1;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--faint)">${esc(i.title)}</span>`}
+      ${i.url ? `<button class="copy-link-btn" data-copy-url="${esc(i.url)}" title="Copy link">⧉</button>` : ""}
       <span class="pill p-${i.sev.toLowerCase()==='high'?'high':i.sev.toLowerCase()==='medium'?'med':'watch'}">${i.sev}</span>
     </div>`).join("") || `<div class="empty">No mentions yet — run a scan from your backend worker to start populating this workspace.</div>`;
+  wireCopyButtons(box);
+}
+
+function wireCopyButtons(scope) {
+  scope.querySelectorAll("[data-copy-url]").forEach(btn => btn.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    navigator.clipboard.writeText(btn.dataset.copyUrl).then(
+      () => toast("Link copied", "The mention's URL is on your clipboard", "good"),
+      () => toast("Couldn't copy", "Your browser blocked clipboard access", "warn")
+    );
+  });
 }
 
 /* =================== ANALYTICS =================== */
@@ -1014,11 +1176,13 @@ async function renderLog() {
   $("#logBody").innerHTML = rows.map(i => `<tr data-inc="${i.id}">
     <td class="td-ref">${i.ref}</td>
     <td><span class="pill p-${i.sev.toLowerCase()==='high'?'high':i.sev.toLowerCase()==='medium'?'med':'watch'}">${i.sev}</span></td>
-    <td style="max-width:420px">${esc(i.title)}</td>
+    <td style="max-width:380px">${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener" class="mention-link">${esc(i.title)}</a>` : esc(i.title)}</td>
     <td>${i.platform}</td>
+    <td>${i.url ? `<button class="copy-link-btn" data-copy-url="${esc(i.url)}" title="Copy link">⧉</button>` : `<span style="color:var(--faint);font-size:11px">—</span>`}</td>
     <td><select class="status-sel" data-inc-status="${i.id}"><option ${i.status==='open'?'selected':''}>open</option><option ${i.status==='resolved'?'selected':''}>resolved</option><option ${i.status==='dismissed'?'selected':''}>dismissed</option></select></td>
     <td style="font-family:monospace;font-size:11px;color:var(--faint)">${i.posted ? new Date(i.posted).toLocaleDateString() : "—"}</td>
   </tr>`).join("");
+  wireCopyButtons($("#logBody"));
   $("#logBody").querySelectorAll("[data-inc-status]").forEach(sel => sel.onchange = async () => {
     try { await api(`/api/incidents/${sel.dataset.incStatus}/status`, { method: "PATCH", body: { status: sel.value } });
       toast("Status updated", "Incident marked " + sel.value); } catch (e) { toast("Update failed", e.message, "warn"); }
@@ -1137,6 +1301,52 @@ $("#tmInviteBtn").onclick = async () => {
   } catch (e) { toast("Invite failed", e.message, "warn"); }
 };
 
+/* =================== SOURCES =================== */
+async function renderSources() {
+  let sources; try { sources = await api("/api/sources"); } catch (e) { toast("Couldn't load sources", e.message, "warn"); return; }
+  $("#sourcesList").innerHTML = sources.map(s => `
+    <div class="source-card">
+      <span class="sc-dot ${s.active ? "active" : "inactive"}"></span>
+      <div><div class="sc-name">${esc(s.label)}</div>
+        ${s.note ? `<div class="sc-note">${esc(s.note)}</div>` : ""}</div>
+      <span class="sc-badge ${s.active ? "active" : "inactive"}">${s.active ? "Active" : "Not connected"}</span>
+    </div>`).join("");
+}
+
+/* =================== PROFILE =================== */
+let pendingAvatarBase64 = null;
+async function renderProfile() {
+  const m = SESSION.member;
+  $("#pfName").value = m.name || ""; $("#pfEmail").value = m.email || "";
+  $("#pfJobTitle").value = m.job_title || ""; $("#pfPhone").value = m.phone || "";
+  $("#pfAddress").value = m.address || ""; $("#pfCity").value = m.city || ""; $("#pfCountry").value = m.country || "";
+  const preview = $("#avatarPreview");
+  if (m.avatar_base64) { preview.innerHTML = `<img src="${m.avatar_base64}">`; }
+  else { preview.textContent = (m.name || "?").charAt(0).toUpperCase(); }
+  pendingAvatarBase64 = null;
+}
+$("#avatarUploadBtn").onclick = () => $("#avatarFileInput").click();
+$("#avatarFileInput").addEventListener("change", (e) => {
+  const file = e.target.files[0]; if (!file) return;
+  if (file.size > 550000) { toast("Image too large", "Please use a photo under ~500KB", "warn"); return; }
+  const reader = new FileReader();
+  reader.onload = () => { pendingAvatarBase64 = reader.result; $("#avatarPreview").innerHTML = `<img src="${reader.result}">`; };
+  reader.readAsDataURL(file);
+});
+$("#pfSaveBtn").onclick = async () => {
+  const body = { name: $("#pfName").value.trim(), job_title: $("#pfJobTitle").value.trim(),
+    phone: $("#pfPhone").value.trim(), address: $("#pfAddress").value.trim(),
+    city: $("#pfCity").value.trim(), country: $("#pfCountry").value.trim() };
+  if (pendingAvatarBase64) body.avatar_base64 = pendingAvatarBase64;
+  try {
+    const data = await api("/api/me/profile", { method: "PATCH", body });
+    SESSION.member = data.member;
+    $("#sideUserName").textContent = SESSION.member.name;
+    $("#sideAvatar").textContent = SESSION.member.name.charAt(0).toUpperCase();
+    toast("Profile saved", "Your details have been updated", "good");
+  } catch (e) { toast("Couldn't save profile", e.message, "warn"); }
+};
+
 /* =================== SETTINGS =================== */
 async function renderSettings() {
   if (!ACTIVE_WS) return;
@@ -1197,10 +1407,7 @@ if ($("#toLogin")) $("#toLogin").onclick = e => { e.preventDefault(); showScreen
 if ($("#toSignup")) $("#toSignup").onclick = e => { e.preventDefault(); showScreen("screen-signup"); };
 if ($("#loginToLanding")) $("#loginToLanding").onclick = e => { e.preventDefault(); showScreen("screen-landing"); };
 if ($("#suToLanding")) $("#suToLanding").onclick = e => { e.preventDefault(); showScreen("screen-landing"); };
-document.querySelectorAll(".plan-select").forEach(b => b.onclick = () => {
-  showScreen("screen-signup");
-  const r = document.querySelector(`input[name="suPlan"][value="${b.dataset.plan}"]`); if (r) r.checked = true;
-});
+document.querySelectorAll(".plan-select").forEach(b => b.onclick = () => showScreen("screen-signup"));
 
 /* =================== LANDING PAGE DECORATION — purely cosmetic. Wrapped so
    that a missing browser API, a blocked font, or any other failure here can
