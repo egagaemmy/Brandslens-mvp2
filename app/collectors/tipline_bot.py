@@ -19,7 +19,7 @@ import logging
 from ..config import TIPLINE_BOT_TOKEN
 from ..db import SessionLocal
 from ..models import Workspace, TipLineMessage
-from .pipeline import ingest_candidates
+from ..services.pipeline import ingest_candidates
 from sqlalchemy import select
 
 log = logging.getLogger("tipline")
