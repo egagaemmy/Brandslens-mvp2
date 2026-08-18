@@ -596,6 +596,24 @@ def chat_enquiry(body: ChatEnquiryBody, request: Request) -> dict:
     return {"reply": answer(body.message, body.history)}
 
 
+@app.get("/api/setup/reset-database")
+def setup_reset_database(secret: str) -> dict:
+    """Temporary, one-time-use route — drops and recreates every table from
+    the current model definitions. Safe ONLY because there's no real
+    customer data on this deployment yet — this is a genuine, irreversible
+    wipe, not something to ever leave reachable or reuse casually. Protected
+    by the same ADMIN_SETUP_SECRET as the admin-creation route. Remove this
+    route and redeploy once you've used it."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    from .models import Base
+    from .db import engine
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    return {"ok": True, "message": "Database reset — every table recreated fresh with the current "
+           "schema. All previous test data is gone. Now call /api/setup/create-admin to create your account."}
+
+
 @app.get("/api/setup/create-admin")
 def setup_create_admin(secret: str, password: str, db: Session = Depends(get_db)) -> dict:
     """Temporary, one-time-use route — exists only because Render's Shell
