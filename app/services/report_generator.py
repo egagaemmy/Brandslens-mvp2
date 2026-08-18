@@ -28,6 +28,21 @@ from ..models import Workspace, Incident
 NAVY = HexColor("#" + BRAND["navy"])
 AMBER = HexColor("#" + BRAND["amber"])
 SLATE = HexColor("#" + BRAND["slate"])
+
+
+def _safe(text: str) -> str:
+    """Escapes any text before it goes into a ReportLab Paragraph. This is
+    not optional — Paragraph has its own small markup language (for bold,
+    colour, etc.), so any '<', '>', or '&' in real content gets interpreted
+    as broken markup instead of plain text. Real incidents come from scraped
+    news/RSS/forum content and genuinely do contain raw HTML fragments (a
+    literal <img alt="..." src="..." /> tag showed up in production and
+    crashed PDF generation entirely before this fix existed) — this isn't a
+    hypothetical edge case, it's confirmed, reproduced, real content."""
+    return (str(text or "")
+           .replace("&", "&amp;")
+           .replace("<", "&lt;")
+           .replace(">", "&gt;"))
 OFFWHITE = HexColor("#" + BRAND["off_white"])
 
 
@@ -53,7 +68,7 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident]) -> byte
 
     story = [
         Paragraph(BRAND["name"].upper(), brand_style),
-        Paragraph(f"{workspace.name} — Monitoring Report", title_style),
+        Paragraph(f"{_safe(workspace.name)} — Monitoring Report", title_style),
         Paragraph(f"Generated {datetime.now(timezone.utc).strftime('%d %B %Y, %H:%M UTC')} · "
                  f"{len(incidents)} mentions in range", sub_style),
         HRFlowable(width="100%", color=HexColor("#E5E7EB"), thickness=1, spaceAfter=12),
@@ -102,8 +117,8 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident]) -> byte
     for inc in top:
         color = HexColor("#" + severity_color(inc.severity))
         row = Table([[Paragraph(f'<font color="#{severity_color(inc.severity)}"><b>{inc.severity}</b></font> '
-                               f'&nbsp;&nbsp;{inc.ref} · {inc.platform}', body_style)],
-                    [Paragraph(inc.title[:220], body_style)]], colWidths=[174 * mm])
+                               f'&nbsp;&nbsp;{_safe(inc.ref)} · {_safe(inc.platform)}', body_style)],
+                    [Paragraph(_safe(inc.title[:220]), body_style)]], colWidths=[174 * mm])
         row.setStyle(TableStyle([
             ("LEFTPADDING", (0, 0), (-1, -1), 10), ("TOPPADDING", (0, 0), (-1, 0), 6),
             ("BOTTOMPADDING", (0, 1), (-1, 1), 8),
