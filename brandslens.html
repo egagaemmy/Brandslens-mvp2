@@ -1004,7 +1004,7 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 /* =================== CONFIG =================== */
-const API_BASE = window.BRANDSLENS_API || "http://localhost:8000";
+const API_BASE = window.BRANDSLENS_API || "https://brandslens-mvp2.onrender.com";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const el = h => { const d = document.createElement("div"); d.innerHTML = h.trim(); return d.firstChild; };
