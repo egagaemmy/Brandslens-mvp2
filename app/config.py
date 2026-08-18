@@ -31,6 +31,7 @@ X_BEARER_TOKEN = env("X_BEARER_TOKEN")
 
 # --- Alerts ---
 RESEND_API_KEY = env("RESEND_API_KEY")
+ADMIN_SETUP_SECRET = env("ADMIN_SETUP_SECRET")  # temporary — protects the one-time /api/setup/create-admin route
 MAIL_FROM = env("MAIL_FROM", "watch@brandslens.app")
 ENTERPRISE_INQUIRY_EMAIL = env("ENTERPRISE_INQUIRY_EMAIL", "kgrnigeria@gmail.com")
 SLACK_WEBHOOK_DEFAULT = env("SLACK_WEBHOOK_DEFAULT")
