@@ -347,7 +347,26 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
 .switch-track[data-pos="1"]::before{transform:translateX(22px)}
 .switch-track[data-pos="2"]::before{transform:translateX(44px)}
 
-/* ============ PROFILE ============ */
+/* ============ CHATBOT WIDGET ============ */
+#chatFab{position:fixed;bottom:26px;right:26px;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,var(--amber),var(--amber-dark));box-shadow:0 8px 24px -6px rgba(217,119,6,.5);display:flex;align-items:center;justify-content:center;font-size:24px;z-index:150;transition:.2s}
+#chatFab:hover{transform:scale(1.06)}
+#chatWindow{position:fixed;bottom:96px;right:26px;width:min(360px,88vw);height:min(480px,70vh);background:#fff;border-radius:18px;box-shadow:0 24px 64px rgba(0,0,0,.25);z-index:150;display:none;flex-direction:column;overflow:hidden;border:1px solid var(--line)}
+#chatWindow.open{display:flex}
+.chat-header{background:var(--navy-dark);color:#fff;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.chat-header .ch-title{display:flex;align-items:center;gap:9px;font-weight:700;font-size:13.5px}
+.chat-close{background:rgba(255,255,255,.1);border-radius:8px;width:26px;height:26px;color:#fff;font-size:13px}
+.chat-body{flex:1;overflow-y:auto;padding:14px;background:var(--panel-2)}
+.chat-msg{max-width:82%;padding:9px 13px;border-radius:12px;font-size:13px;line-height:1.5;margin-bottom:10px}
+.chat-msg.user{background:var(--navy);color:#fff;margin-left:auto;border-bottom-right-radius:3px}
+.chat-msg.bot{background:#fff;border:1px solid var(--line);color:var(--text);border-bottom-left-radius:3px}
+.chat-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line);flex-shrink:0}
+.chat-input-row input{flex:1;font-size:13px;padding:10px 12px}
+.chat-input-row button{background:var(--amber-dark);color:#fff;border-radius:9px;width:38px;flex-shrink:0;font-size:15px}
+.chat-typing{display:flex;gap:4px;padding:9px 13px}
+.chat-typing span{width:6px;height:6px;border-radius:50%;background:var(--faint);animation:chatDot 1.2s infinite}
+.chat-typing span:nth-child(2){animation-delay:.2s} .chat-typing span:nth-child(3){animation-delay:.4s}
+@keyframes chatDot{0%,60%,100%{opacity:.3}30%{opacity:1}}
+
 .avatar-upload{display:flex;align-items:center;gap:20px;margin-bottom:24px}
 .avatar-preview{width:84px;height:84px;border-radius:16px;background:var(--inset);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:32px;color:var(--slate);overflow:hidden;flex-shrink:0;border:1.5px solid var(--line)}
 .avatar-preview img{width:100%;height:100%;object-fit:cover}
@@ -589,9 +608,25 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
     </div>
     <div class="lp-footer-meta">
       <span>© 2026 BrandsLens Limited</span>
+      <span><a href="#" onclick="window.open(API_BASE + '/legal/terms', '_blank'); return false;" style="color:rgba(255,255,255,.4)">Terms of Service</a> · <a href="#" onclick="window.open(API_BASE + '/legal/privacy', '_blank'); return false;" style="color:rgba(255,255,255,.4)">Privacy Policy</a></span>
       <span>Clarity · Trust · Intelligence · Protection · Impact</span>
     </div>
   </footer>
+
+  <button id="chatFab" title="Ask BrandsLens">💬</button>
+  <div id="chatWindow">
+    <div class="chat-header">
+      <div class="ch-title"><svg width="16" height="16"><use href="#lensMark"/></svg> Ask BrandsLens</div>
+      <button class="chat-close" id="chatCloseBtn">✕</button>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <div class="chat-msg bot">Hi — I'm here to answer questions about BrandsLens: pricing, what we monitor, how it works. What would you like to know?</div>
+    </div>
+    <div class="chat-input-row">
+      <input id="chatInput" placeholder="Ask a question…" maxlength="500">
+      <button id="chatSendBtn">➤</button>
+    </div>
+  </div>
 </div>
 
 <!-- ================= LOGIN ================= -->
@@ -774,6 +809,16 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
     <div class="app-topbar">
       <div><h1 id="topH1">Dashboard</h1><div class="sub" id="topSub">Monitoring overview</div></div>
       <div class="topbar-right">
+        <div class="workspace-sel" id="dateRangeWrap">
+          <span style="font-size:10px;color:var(--faint);font-weight:700">DATES</span>
+          <select id="globalDateRange">
+            <option value="">All time</option><option value="today">Today</option>
+            <option value="week">This week</option><option value="month">This month</option>
+            <option value="custom">Custom…</option>
+          </select>
+        </div>
+        <input type="date" id="globalDateStart" style="display:none;width:130px">
+        <input type="date" id="globalDateEnd" style="display:none;width:130px">
         <div class="workspace-sel" id="workspaceSelWrap" style="display:none">
           <span style="font-size:10px;color:var(--faint);font-weight:700">WORKSPACE</span>
           <select id="wsSel"></select>
@@ -923,7 +968,25 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
 
     <!-- BILLING -->
     <section data-tab="billing">
-      <div class="grid g3" id="billingCards"></div>
+      <div id="viewAsPanel" style="display:none;margin-bottom:16px"></div>
+      <div class="price-switch" id="billingCycleToggle" style="justify-content:flex-start;margin-bottom:16px">
+        <span class="active" data-cycle="annual" style="color:var(--navy)">Annual <span class="save-tag">best value</span></span>
+        <div class="switch-track" id="billingSwitchTrack" data-pos="0"></div>
+        <span data-cycle="monthly" style="color:var(--slate)">Monthly</span>
+        <span data-cycle="daily" style="color:var(--slate)">Daily</span>
+      </div>
+      <div class="grid g4" id="billingCards"></div>
+      <div class="card" id="billingEnterpriseCard" style="margin-top:16px;display:none">
+        <h3>Enterprise</h3>
+        <p style="font-size:13px;color:var(--slate);margin-bottom:14px">Custom quote, priced to the extent of the work.</p>
+        <button class="btn btn-outline btn-sm" id="billingShowEnterpriseForm">Get a quote</button>
+        <div id="billingEnterpriseFormWrap" style="display:none;margin-top:14px;max-width:420px">
+          <div class="form-field"><label>Name</label><input id="bEntName"></div>
+          <div class="form-field"><label>Email</label><input id="bEntEmail" type="email"></div>
+          <div class="form-field"><label>Message</label><textarea id="bEntMessage" rows="3" style="width:100%;padding:10px;border:1.5px solid var(--line);border-radius:8px"></textarea></div>
+          <button class="btn btn-amber btn-sm" id="bEntSubmit">Send inquiry</button>
+        </div>
+      </div>
       <div class="card" style="margin-top:16px;max-width:520px"><h3>Account</h3>
         <div class="form-field"><label>Company</label><input id="acctCompany" disabled></div>
         <div class="form-field"><label>Email</label><input id="acctEmail" disabled></div>
@@ -946,8 +1009,8 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const el = h => { const d = document.createElement("div"); d.innerHTML = h.trim(); return d.firstChild; };
 const ROLE_LABEL = { owner: "Owner", lead: "Team Lead", member: "Team Member" };
-const PLAN_LABEL = { professional: "Professional", corp_growth: "Corporate Growth", enterprise: "Enterprise" };
-const PLAN_ANNUAL = { professional: 1500, corp_growth: 2500, enterprise: 3500 };
+const PLAN_LABEL = { standard: "Standard", growth: "Growth", professional: "Professional", enterprise: "Enterprise" };
+const PLAN_ANNUAL = { standard: 1500, growth: 2500, professional: 3500 };
 const SEV_COLOR = { HIGH: "#EF4444", MEDIUM: "#F59E0B", WATCH: "#10B981" };
 const SENT_COLOR = { Positive: "#10B981", Negative: "#EF4444", Neutral: "#94A3B8" };
 
@@ -1203,11 +1266,16 @@ const TAB_TITLES = {
   sources: ["Sources", "Where your mentions actually come from"], profile: ["Profile", "Your personal details"],
   settings: ["Settings", "Keywords, domains and sources"], billing: ["Billing & Plan", "Manage your subscription"],
 };
+const DATE_RANGE_TABS = ["dashboard", "analytics", "log", "reports"];
 async function switchTab(tab) {
   currentTab = tab;
   document.querySelectorAll(".navlink[data-target]").forEach(b => b.classList.toggle("active", b.dataset.target === tab));
   document.querySelectorAll("section[data-tab]").forEach(s => s.classList.toggle("active", s.dataset.tab === tab));
   $("#topH1").textContent = TAB_TITLES[tab][0]; $("#topSub").textContent = TAB_TITLES[tab][1];
+  $("#dateRangeWrap").style.display = DATE_RANGE_TABS.includes(tab) ? "flex" : "none";
+  const showCustom = DATE_RANGE_TABS.includes(tab) && $("#globalDateRange").value === "custom";
+  $("#globalDateStart").style.display = showCustom ? "block" : "none";
+  $("#globalDateEnd").style.display = showCustom ? "block" : "none";
   if (tab === "dashboard") await renderDashboard();
   if (tab === "analytics") await renderAnalytics();
   if (tab === "log") await renderLog();
@@ -1221,6 +1289,27 @@ async function switchTab(tab) {
 }
 document.querySelectorAll(".navlink[data-target]").forEach(b => b.onclick = () => switchTab(b.dataset.target));
 
+/* ---- Shared date-range state, applies consistently to Dashboard, Analytics, Incident Log, and Reports ---- */
+function buildDateQuery() {
+  const range = $("#globalDateRange").value;
+  if (!range) return "";
+  if (range === "custom") {
+    const s = $("#globalDateStart").value, e = $("#globalDateEnd").value;
+    if (!s) return "";
+    return `&range=custom&start=${s}` + (e ? `&end=${e}` : "");
+  }
+  return `&range=${range}`;
+}
+$("#globalDateRange").addEventListener("change", async () => {
+  const isCustom = $("#globalDateRange").value === "custom";
+  $("#globalDateStart").style.display = isCustom ? "block" : "none";
+  $("#globalDateEnd").style.display = isCustom ? "block" : "none";
+  if (!isCustom || $("#globalDateStart").value) await switchTab(currentTab);
+});
+["globalDateStart", "globalDateEnd"].forEach(id => $("#"+id).addEventListener("change", async () => {
+  if ($("#globalDateStart").value) await switchTab(currentTab);
+}));
+
 /* =================== DASHBOARD =================== */
 let chartTrend, chartSeverity, chartSentiment, chartPlatform, chartTrend2, chartReportSeverity, chartReportTrend;
 function destroyChart(c) { if (c) c.destroy(); }
@@ -1228,9 +1317,9 @@ function destroyChart(c) { if (c) c.destroy(); }
 async function renderDashboard() {
   if (!ACTIVE_WS) return;
   let data;
-  try { data = await api(`/api/workspaces/${ACTIVE_WS}`); } catch (e) { toast("Couldn't load workspace", e.message, "warn"); return; }
+  try { data = await api(`/api/workspaces/${ACTIVE_WS}?_=1${buildDateQuery()}`); } catch (e) { toast("Couldn't load workspace", e.message, "warn"); return; }
   let analytics;
-  try { analytics = await api(`/api/analytics/${ACTIVE_WS}`); } catch (e) { analytics = { severity: {}, trend: [] }; }
+  try { analytics = await api(`/api/analytics/${ACTIVE_WS}?_=1${buildDateQuery()}`); } catch (e) { analytics = { severity: {}, trend: [] }; }
 
   const incidents = data.incidents || [];
   const sev = analytics.severity || {};
@@ -1285,7 +1374,7 @@ function wireCopyButtons(scope) {
 /* =================== ANALYTICS =================== */
 async function renderAnalytics() {
   if (!ACTIVE_WS) return;
-  let analytics; try { analytics = await api(`/api/analytics/${ACTIVE_WS}`); } catch (e) { toast("Couldn't load analytics", e.message, "warn"); return; }
+  let analytics; try { analytics = await api(`/api/analytics/${ACTIVE_WS}?_=1${buildDateQuery()}`); } catch (e) { toast("Couldn't load analytics", e.message, "warn"); return; }
 
   destroyChart(chartSentiment);
   const sent = analytics.sentiment || {}, sentLabels = Object.keys(sent), sentVals = Object.values(sent);
@@ -1311,7 +1400,7 @@ async function renderAnalytics() {
 /* =================== INCIDENT LOG =================== */
 async function renderLog() {
   if (!ACTIVE_WS) return;
-  let data; try { data = await api(`/api/workspaces/${ACTIVE_WS}`); } catch (e) { toast("Couldn't load incidents", e.message, "warn"); return; }
+  let data; try { data = await api(`/api/workspaces/${ACTIVE_WS}?_=1${buildDateQuery()}`); } catch (e) { toast("Couldn't load incidents", e.message, "warn"); return; }
   let rows = data.incidents || [];
   const sev = $("#fSev").value, status = $("#fStatus").value, q = $("#fSearch").value.toLowerCase();
   rows = rows.filter(i => (!sev || i.sev === sev) && (!status || i.status === status) &&
@@ -1404,7 +1493,7 @@ $("#overlay").onclick = closeDrawer;
 /* =================== REPORTS =================== */
 async function renderReports() {
   if (!ACTIVE_WS) return;
-  let analytics; try { analytics = await api(`/api/analytics/${ACTIVE_WS}`); } catch (e) { return; }
+  let analytics; try { analytics = await api(`/api/analytics/${ACTIVE_WS}?_=1${buildDateQuery()}`); } catch (e) { return; }
   destroyChart(chartReportSeverity);
   const sev = analytics.severity || {}, sevLabels = Object.keys(sev), sevVals = Object.values(sev);
   chartReportSeverity = new Chart($("#chartReportSeverity"), { type: "pie",
@@ -1416,8 +1505,8 @@ async function renderReports() {
     data: { labels: trend.map(t=>t.date.slice(5)), datasets: [{ data: trend.map(t=>t.count), backgroundColor: "#F59E0B", borderRadius: 4 }] },
     options: { plugins:{legend:{display:false}}, maintainAspectRatio: false } });
 }
-$("#btnDownloadPdf").onclick = () => { if (!ACTIVE_WS) return; toast("Generating…", "Your branded PDF report is on its way"); downloadFile(`/api/reports/pdf?ws_id=${ACTIVE_WS}`, "brandslens-report.pdf"); };
-$("#btnDownloadExcel").onclick = () => { if (!ACTIVE_WS) return; toast("Generating…", "Your Excel export is on its way"); downloadFile(`/api/reports/excel?ws_id=${ACTIVE_WS}`, "brandslens-export.xlsx"); };
+$("#btnDownloadPdf").onclick = () => { if (!ACTIVE_WS) return; toast("Generating…", "Your branded PDF report is on its way"); downloadFile(`/api/reports/pdf?ws_id=${ACTIVE_WS}${buildDateQuery()}`, "brandslens-report.pdf"); };
+$("#btnDownloadExcel").onclick = () => { if (!ACTIVE_WS) return; toast("Generating…", "Your Excel export is on its way"); downloadFile(`/api/reports/excel?ws_id=${ACTIVE_WS}${buildDateQuery()}`, "brandslens-export.xlsx"); };
 
 /* =================== TEAM =================== */
 async function renderTeam() {
@@ -1538,23 +1627,87 @@ $("#domainAddBtn").onclick = () => addToWorkspaceList("brand_domains", "#domainI
 $("#rssAddBtn").onclick = () => addToWorkspaceList("rss_feeds", "#rssInput");
 
 /* =================== BILLING =================== */
-async function renderBilling() {
-  let status; try { status = await api("/api/billing/status"); } catch (e) { status = SESSION.organization || {}; }
-  $("#billingCards").innerHTML = ["professional","corp_growth","enterprise"].map(p => {
-    const isCurrent = status.plan === p;
+let billingCycle = "annual";
+function _cyclePrice(annual, cycle) {
+  if (cycle === "annual") return `$${annual.toLocaleString()}<span style="font-size:12px">/yr</span>`;
+  if (cycle === "monthly") return `$${(annual/12*1.15).toFixed(2)}<span style="font-size:12px">/mo</span>`;
+  return `$${(annual/365*1.20).toFixed(2)}<span style="font-size:12px">/day</span>`;
+}
+if ($("#billingCycleToggle")) $("#billingCycleToggle").addEventListener("click", e => {
+  const target = e.target.closest("[data-cycle]");
+  const pos = { annual: 0, monthly: 1, daily: 2 };
+  const setCycle = c => {
+    billingCycle = c;
+    document.querySelectorAll("#billingCycleToggle [data-cycle]").forEach(s => { s.classList.toggle("active", s.dataset.cycle === c); s.style.color = s.dataset.cycle === c ? "var(--navy)" : "var(--slate)"; });
+    $("#billingSwitchTrack").dataset.pos = pos[c];
+    renderBillingCards();
+  };
+  if (target) { setCycle(target.dataset.cycle); return; }
+  if (e.target.closest("#billingSwitchTrack")) { const order = ["annual","monthly","daily"]; setCycle(order[(order.indexOf(billingCycle)+1)%3]); }
+});
+
+let lastBillingStatus = null;
+function renderBillingCards() {
+  const status = lastBillingStatus || {};
+  const effective = status.effective_plan || status.plan;
+  $("#billingCards").innerHTML = ["standard","growth","professional"].map(p => {
+    const isCurrent = effective === p;
     return `<div class="card" style="${isCurrent?'border-color:var(--amber);box-shadow:0 0 0 4px rgba(245,158,11,.12)':''}">
       <h3>${PLAN_LABEL[p]}</h3>
-      <div style="font-family:var(--serif);font-size:30px;color:var(--navy);margin:8px 0">$${PLAN_ANNUAL[p].toLocaleString()}<span style="font-size:13px;color:var(--faint)">/yr</span></div>
+      <div style="font-family:var(--serif);font-size:26px;color:var(--navy);margin:8px 0">${_cyclePrice(PLAN_ANNUAL[p], billingCycle)}</div>
       ${isCurrent ? `<button class="btn btn-outline btn-block" disabled>Current plan</button>` :
         `<button class="btn btn-navy btn-block" data-checkout="${p}">Switch to ${PLAN_LABEL[p]}</button>`}
     </div>`;
   }).join("");
   document.querySelectorAll("[data-checkout]").forEach(b => b.onclick = async () => {
     try {
-      const data = await api("/api/billing/checkout", { method: "POST", body: { plan: b.dataset.checkout, cycle: "annual", provider: "stripe" } });
+      const data = await api("/api/billing/checkout", { method: "POST", body: { plan: b.dataset.checkout, cycle: billingCycle, provider: "stripe" } });
       if (data.checkout_url) window.location.href = data.checkout_url;
     } catch (e) { toast("Billing not connected yet", e.message, "warn"); }
   });
+  $("#billingEnterpriseCard").style.display = effective === "enterprise" ? "none" : "block";
+}
+
+if ($("#billingShowEnterpriseForm")) $("#billingShowEnterpriseForm").onclick = () => {
+  $("#billingEnterpriseFormWrap").style.display = "block";
+  $("#billingShowEnterpriseForm").style.display = "none";
+};
+if ($("#bEntSubmit")) $("#bEntSubmit").onclick = async () => {
+  const name = $("#bEntName").value.trim(), email = $("#bEntEmail").value.trim(), message = $("#bEntMessage").value.trim();
+  if (!name || !email) { toast("Missing details", "Enter your name and email", "warn"); return; }
+  try {
+    await api("/api/enterprise-inquiry", { method: "POST", body: { name, email, company: SESSION.organization?.name || "", message } });
+    $("#billingEnterpriseFormWrap").innerHTML = `<p style="font-size:13px;color:var(--slate)">Thanks — we'll be in touch shortly.</p>`;
+  } catch (e) { toast("Couldn't send", e.message, "warn"); }
+};
+
+function renderViewAsPanel(status) {
+  const panel = $("#viewAsPanel");
+  if (!status.is_exempt) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  const plans = ["standard","growth","professional","enterprise"];
+  panel.innerHTML = `<div class="card" style="border-color:var(--amber);background:#FFFBEB">
+    <h3>Admin: View As <span class="h-sub">${status.is_admin_view_as ? `Currently simulating ${PLAN_LABEL[status.effective_plan] || status.effective_plan}` : "Viewing your real, unlimited account"}</span></h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${plans.map(p => `<button class="btn btn-sm ${status.effective_plan===p && status.is_admin_view_as ? 'btn-amber' : 'btn-outline'}" data-view-as="${p}">${PLAN_LABEL[p] || 'Enterprise'}</button>`).join("")}
+      <button class="btn btn-navy btn-sm" data-view-as-reset="1">Reset to real (unlimited)</button>
+    </div>
+  </div>`;
+  panel.querySelectorAll("[data-view-as]").forEach(b => b.onclick = async () => {
+    try { await api("/api/admin/view-as", { method: "POST", body: { plan: b.dataset.viewAs } }); toast("View As updated", `Now simulating ${b.textContent}`, "good"); await renderBilling(); }
+    catch (e) { toast("Couldn't switch view", e.message, "warn"); }
+  });
+  panel.querySelector("[data-view-as-reset]").onclick = async () => {
+    try { await api("/api/admin/view-as", { method: "POST", body: { plan: null } }); toast("Reset", "Back to your real unlimited view", "good"); await renderBilling(); }
+    catch (e) { toast("Couldn't reset", e.message, "warn"); }
+  };
+}
+
+async function renderBilling() {
+  let status; try { status = await api("/api/billing/status"); } catch (e) { status = SESSION.organization || {}; }
+  lastBillingStatus = status;
+  renderBillingCards();
+  renderViewAsPanel(status);
 }
 
 /* =================== CRITICAL NAVIGATION — wired first, before any decorative
@@ -1638,6 +1791,65 @@ function initLanding() {
     document.querySelectorAll(".reveal").forEach(elx => elx.classList.add("in"));
   }
 }
+
+/* =================== CHATBOT WIDGET =================== */
+let chatHistory = [];
+let chatOpen = false;
+function toggleChat(open) {
+  chatOpen = open;
+  $("#chatWindow").classList.toggle("open", open);
+}
+if ($("#chatFab")) $("#chatFab").onclick = () => toggleChat(!chatOpen);
+if ($("#chatCloseBtn")) $("#chatCloseBtn").onclick = () => toggleChat(false);
+
+function appendChatMsg(text, who) {
+  const body = $("#chatBody");
+  const msg = el(`<div class="chat-msg ${who}"></div>`);
+  msg.textContent = text;
+  body.appendChild(msg);
+  body.scrollTop = body.scrollHeight;
+  return msg;
+}
+function showChatTyping() {
+  const body = $("#chatBody");
+  const t = el(`<div class="chat-msg bot chat-typing" id="chatTypingIndicator"><span></span><span></span><span></span></div>`);
+  body.appendChild(t);
+  body.scrollTop = body.scrollHeight;
+}
+function removeChatTyping() {
+  const t = document.getElementById("chatTypingIndicator");
+  if (t) t.remove();
+}
+
+async function sendChatMessage() {
+  const input = $("#chatInput");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  appendChatMsg(message, "user");
+  chatHistory.push({ role: "user", content: message });
+  showChatTyping();
+  try {
+    const res = await fetch(API_BASE + "/api/chat/enquiry", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history: chatHistory.slice(-6) }),
+    });
+    removeChatTyping();
+    if (res.status === 429) {
+      appendChatMsg("You've asked quite a few questions — please try again in a few minutes.", "bot");
+      return;
+    }
+    const data = await res.json();
+    const reply = data.reply || "I couldn't quite answer that — could you rephrase?";
+    appendChatMsg(reply, "bot");
+    chatHistory.push({ role: "assistant", content: reply });
+  } catch (e) {
+    removeChatTyping();
+    appendChatMsg("Something went wrong reaching me just now — please try again.", "bot");
+  }
+}
+if ($("#chatSendBtn")) $("#chatSendBtn").onclick = sendChatMessage;
+if ($("#chatInput")) $("#chatInput").addEventListener("keydown", e => { if (e.key === "Enter") sendChatMessage(); });
 
 /* =================== BOOT =================== */
 try { initLanding(); } catch (e) { console.warn("initLanding failed:", e); }

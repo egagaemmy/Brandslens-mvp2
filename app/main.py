@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -212,10 +213,44 @@ def list_workspaces(member: OrgMember = Depends(active_member), db: Session = De
     return [{"id": w.id, "name": w.name, "sector": w.sector} for w in workspaces]
 
 
+def _date_range_bounds(range_key: str | None, start: str | None, end: str | None):
+    """Turns a preset ('today'/'week'/'month'/'custom') or explicit ISO date
+    strings into (start_dt, end_dt) in UTC. Returns (None, None) when no
+    filter should be applied — every endpoint below treats that as 'show
+    everything', so a missing/unrecognized filter never silently hides data."""
+    from datetime import timedelta
+    now = now_utc()
+    if range_key == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0), now
+    if range_key == "week":
+        return now - timedelta(days=7), now
+    if range_key == "month":
+        return now - timedelta(days=30), now
+    if range_key == "custom" and start:
+        try:
+            start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+            end_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else now
+            return start_dt, end_dt
+        except ValueError:
+            return None, None
+    return None, None
+
+
+def _apply_date_filter(query, range_key: str | None, start: str | None, end: str | None):
+    start_dt, end_dt = _date_range_bounds(range_key, start, end)
+    if start_dt:
+        query = query.where(Incident.posted_at >= start_dt)
+    if end_dt:
+        query = query.where(Incident.posted_at <= end_dt)
+    return query
+
+
 @app.get("/api/workspaces/{ws_id}")
-def get_workspace(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> dict:
-    incidents = db.scalars(select(Incident).where(Incident.workspace_id == ws.id)
-                           .order_by(Incident.posted_at.desc()).limit(200)).all()
+def get_workspace(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
+                  range: str | None = None, start: str | None = None, end: str | None = None) -> dict:
+    q = select(Incident).where(Incident.workspace_id == ws.id)
+    q = _apply_date_filter(q, range, start, end)
+    incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(200)).all()
     return {"id": ws.id, "name": ws.name, "sector": ws.sector,
            "brand_tokens": ws.brand_tokens, "keywords": ws.keywords, "rss_feeds": ws.rss_feeds,
            "brand_domains": ws.brand_domains, "telegram_channels": ws.telegram_channels,
@@ -543,6 +578,24 @@ class EnterpriseInquiryBody(BaseModel):
     message: str = ""
 
 
+class ChatEnquiryBody(BaseModel):
+    message: str
+    history: list[dict] = []
+
+
+@app.post("/api/chat/enquiry")
+def chat_enquiry(body: ChatEnquiryBody, request: Request) -> dict:
+    """Public, unauthenticated — this powers the landing page enquiry bot.
+    Real rate limiting matters here specifically because there's no account,
+    no auth token, nothing stopping abuse the way every other route in this
+    file is protected by current_member/active_member."""
+    from .services.chatbot import answer, check_rate_limit
+    client_ip = request.client.host if request.client else ""
+    if not check_rate_limit(client_ip):
+        raise HTTPException(429, "You've asked quite a few questions — please try again in a few minutes.")
+    return {"reply": answer(body.message, body.history)}
+
+
 @app.post("/api/enterprise-inquiry")
 def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
     """Public, unauthenticated — this is the entire 'checkout flow' for
@@ -550,6 +603,38 @@ def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
     from .services.billing import submit_enterprise_inquiry
     sent = submit_enterprise_inquiry(body.name, body.email, body.company, body.message)
     return {"ok": True, "sent": sent}
+
+
+def _render_legal_page(md_filename: str, title: str) -> str:
+    import markdown, os
+    path = os.path.join(os.path.dirname(__file__), "..", "legal", md_filename)
+    with open(path, "r", encoding="utf-8") as f:
+        body_html = markdown.markdown(f.read(), extensions=["extra"])
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title} — BrandsLens</title>
+<style>
+body{{font-family:-apple-system,Inter,Arial,sans-serif;max-width:760px;margin:0 auto;padding:48px 24px 80px;
+     color:#1F2937;line-height:1.7;background:#F8FAFC}}
+h1,h2,h3{{color:#0F172A}}
+h1{{font-size:28px}} h2{{font-size:20px;margin-top:34px}} h3{{font-size:16px}}
+a{{color:#D97706}}
+.back{{display:inline-block;margin-bottom:24px;color:#475569;text-decoration:none;font-size:14px}}
+table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #E2E8F0;padding:8px 12px;text-align:left}}
+</style></head><body>
+<a class="back" href="/">&larr; Back to BrandsLens</a>
+{body_html}
+</body></html>"""
+
+
+@app.get("/legal/terms", response_class=HTMLResponse)
+def legal_terms() -> str:
+    return _render_legal_page("TERMS_OF_SERVICE.md", "Terms of Service")
+
+
+@app.get("/legal/privacy", response_class=HTMLResponse)
+def legal_privacy() -> str:
+    return _render_legal_page("PRIVACY_POLICY.md", "Privacy Policy")
 
 
 @app.get("/api/health")
@@ -568,14 +653,14 @@ def get_branding() -> dict:
 # ==================================================================
 # REPORTS — real, server-generated PDF and Excel (PRD §6.7)
 # ==================================================================
-from fastapi.responses import Response  # noqa: E402
 from .services import report_generator  # noqa: E402
 
 
 @app.get("/api/reports/pdf")
-def report_pdf(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> Response:
-    incidents = db.scalars(select(Incident).where(Incident.workspace_id == ws.id)
-                           .order_by(Incident.posted_at.desc()).limit(500)).all()
+def report_pdf(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
+               range: str | None = None, start: str | None = None, end: str | None = None) -> Response:
+    q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
+    incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
     pdf_bytes = report_generator.generate_pdf_report(ws, incidents)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
@@ -583,9 +668,10 @@ def report_pdf(ws: Workspace = Depends(owned_workspace), db: Session = Depends(g
 
 
 @app.get("/api/reports/excel")
-def report_excel(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> Response:
-    incidents = db.scalars(select(Incident).where(Incident.workspace_id == ws.id)
-                           .order_by(Incident.posted_at.desc()).limit(2000)).all()
+def report_excel(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
+                 range: str | None = None, start: str | None = None, end: str | None = None) -> Response:
+    q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
+    incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(2000)).all()
     xlsx_bytes = report_generator.generate_excel_export(ws, incidents)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-export.xlsx"
     return Response(content=xlsx_bytes,
@@ -594,12 +680,15 @@ def report_excel(ws: Workspace = Depends(owned_workspace), db: Session = Depends
 
 
 @app.get("/api/analytics/{ws_id}")
-def analytics_summary(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> dict:
+def analytics_summary(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
+                      range: str | None = None, start: str | None = None, end: str | None = None) -> dict:
     """Pre-aggregated chart data so the frontend never has to recompute this
     from raw incidents client-side — same numbers power the dashboard charts,
-    the PDF, and the Excel summary sheet, by construction."""
-    incidents = db.scalars(select(Incident).where(Incident.workspace_id == ws.id)
-                           .order_by(Incident.posted_at.desc()).limit(1000)).all()
+    the PDF, and the Excel summary sheet, by construction. Same date filter
+    as the incident list and exports, so a report always matches what was
+    on screen when it was generated."""
+    q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
+    incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(1000)).all()
     from collections import Counter
     sev = Counter(i.severity for i in incidents)
     sentiment = Counter(i.sentiment for i in incidents if i.sentiment)
