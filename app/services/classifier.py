@@ -46,8 +46,22 @@ def classify_batch(brand_name: str, brand_context: str, items: list[dict]) -> li
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(text)
-        by_idx = {p["idx"]: p for p in parsed if isinstance(p, dict) and "idx" in p}
-        return [_normalise(by_idx.get(i["idx"], _fallback(i["idx"]))) for i in items]
+        # Normalise every idx to int on both sides of this lookup — Claude
+        # (especially a fast model like Haiku) can return "idx": "0" as a
+        # JSON string instead of a number when the prompt only describes the
+        # schema in prose rather than showing a worked example. A single
+        # int/string mismatch here silently loses the real classification and
+        # falls back to WATCH for that item, even though the model answered
+        # correctly. This was a real, confirmed bug, not a hypothetical one.
+        by_idx = {}
+        for p in parsed:
+            if not isinstance(p, dict) or "idx" not in p:
+                continue
+            try:
+                by_idx[int(p["idx"])] = p
+            except (TypeError, ValueError):
+                continue
+        return [_normalise(by_idx.get(int(i["idx"]), _fallback(i["idx"]))) for i in items]
     except Exception:  # noqa: BLE001 — never let a classifier hiccup drop data
         log.exception("Classification failed; everything in this batch defaults to WATCH")
         return [_fallback(i["idx"]) for i in items]
@@ -66,5 +80,9 @@ def _normalise(p: dict) -> dict:
     if sent not in ("Positive", "Negative", "Neutral"):
         sent = "Neutral"
     tags = [t for t in (p.get("tags") or []) if t in ("FRAUD", "DOMAIN RISK", "DISCLOSURE RISK", "STRATEGIC")]
-    return {"idx": p.get("idx"), "severity": sev, "sentiment": sent, "tags": tags,
+    try:
+        idx = int(p.get("idx"))
+    except (TypeError, ValueError):
+        idx = p.get("idx")  # last resort — better to pass through than crash
+    return {"idx": idx, "severity": sev, "sentiment": sent, "tags": tags,
             "lang": str(p.get("lang", "en"))[:8], "rationale": str(p.get("rationale", ""))[:300]}

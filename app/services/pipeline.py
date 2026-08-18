@@ -57,7 +57,12 @@ def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source
         ws.name, f"Sector: {ws.sector}.",
         [{"idx": i, "text": c["text"], "platform": c.get("platform", "")} for i, c in enumerate(survivors)],
     )
-    by_idx = {c["idx"]: c for c in classified}
+    by_idx = {}
+    for c in classified:
+        try:
+            by_idx[int(c["idx"])] = c
+        except (TypeError, ValueError, KeyError):
+            continue
 
     new = high = merged = 0
     for i, cand in enumerate(survivors):
