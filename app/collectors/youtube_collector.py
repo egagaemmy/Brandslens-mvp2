@@ -5,6 +5,7 @@ import logging
 import httpx
 from ..config import YOUTUBE_API_KEY
 from ..models import Workspace
+from ..services.pipeline import search_terms
 
 log = logging.getLogger("collector.youtube")
 
@@ -12,7 +13,7 @@ def collect(db, ws: Workspace) -> list[dict]:
     if not YOUTUBE_API_KEY:
         log.info("YouTube not configured — skipping (set YOUTUBE_API_KEY)")
         return []
-    query = ws.youtube_query or ws.name
+    query = ws.youtube_query or " OR ".join(search_terms(ws))
     try:
         r = httpx.get("https://www.googleapis.com/youtube/v3/search", params={
             "part": "snippet", "q": query, "type": "video", "order": "date",

@@ -24,16 +24,28 @@ from ..models import Organization, OrgMember, BillingEvent, now_utc
 log = logging.getLogger("billing")
 
 PLAN_CATALOG = {
-    "professional": {"annual_usd": 3500, "monthly_usd": 335.42,
+    "standard": {"annual_usd": 1500, "monthly_usd": 143.75, "daily_usd": 4.93,
+                "stripe_price_annual": "price_standard_annual", "stripe_price_monthly": "price_standard_monthly",
+                "stripe_price_daily": "price_standard_daily",
+                "paystack_plan_annual": "PLN_standard_annual", "paystack_plan_monthly": "PLN_standard_monthly",
+                "paystack_plan_daily": "PLN_standard_daily"},
+    "growth": {"annual_usd": 2500, "monthly_usd": 239.58, "daily_usd": 8.22,
+              "stripe_price_annual": "price_growth_annual", "stripe_price_monthly": "price_growth_monthly",
+              "stripe_price_daily": "price_growth_daily",
+              "paystack_plan_annual": "PLN_growth_annual", "paystack_plan_monthly": "PLN_growth_monthly",
+              "paystack_plan_daily": "PLN_growth_daily"},
+    "professional": {"annual_usd": 3500, "monthly_usd": 335.42, "daily_usd": 11.51,
                      "stripe_price_annual": "price_professional_annual", "stripe_price_monthly": "price_professional_monthly",
-                     "paystack_plan_annual": "PLN_professional_annual", "paystack_plan_monthly": "PLN_professional_monthly"},
-    "corp_growth": {"annual_usd": 4500, "monthly_usd": 431.25,
-                    "stripe_price_annual": "price_corpgrowth_annual", "stripe_price_monthly": "price_corpgrowth_monthly",
-                    "paystack_plan_annual": "PLN_corpgrowth_annual", "paystack_plan_monthly": "PLN_corpgrowth_monthly"},
-    "enterprise": {"annual_usd": 5500, "monthly_usd": 527.08,
-                  "stripe_price_annual": "price_enterprise_annual", "stripe_price_monthly": "price_enterprise_monthly",
-                  "paystack_plan_annual": "PLN_enterprise_annual", "paystack_plan_monthly": "PLN_enterprise_monthly"},
+                     "stripe_price_daily": "price_professional_daily",
+                     "paystack_plan_annual": "PLN_professional_annual", "paystack_plan_monthly": "PLN_professional_monthly",
+                     "paystack_plan_daily": "PLN_professional_daily"},
+    # Enterprise deliberately has no entry here — there's no fixed price to
+    # check out against. It's handled entirely by submit_enterprise_inquiry()
+    # below, which emails a real conversation instead of charging a card.
 }
+CYCLE_KEYS = {"annual": ("annual_usd", "stripe_price_annual", "paystack_plan_annual"),
+             "monthly": ("monthly_usd", "stripe_price_monthly", "paystack_plan_monthly"),
+             "daily": ("daily_usd", "stripe_price_daily", "paystack_plan_daily")}
 
 
 class BillingNotConfigured(Exception):
@@ -42,13 +54,24 @@ class BillingNotConfigured(Exception):
     state at MVP stage, not a bug."""
 
 
+def submit_enterprise_inquiry(name: str, email: str, company: str, message: str) -> bool:
+    """Enterprise has no fixed price — 'checkout' for this tier is a real
+    conversation, not a card charge. This emails the inquiry directly rather
+    than creating any billing record at all."""
+    from .mailer import send_enterprise_inquiry
+    return send_enterprise_inquiry(name, email, company, message)
+
+
 def create_stripe_checkout(org: Organization, plan: str, cycle: str, customer_email: str) -> str:
     if not STRIPE_SECRET_KEY:
-        raise BillingNotConfigured("Stripe isn't connected yet — this account remains on its free trial.")
+        raise BillingNotConfigured("Stripe isn't connected yet — please try again shortly or contact support.")
+    if cycle not in CYCLE_KEYS:
+        raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
     import stripe
     stripe.api_key = STRIPE_SECRET_KEY
     catalog = PLAN_CATALOG[plan]
-    price_id = catalog["stripe_price_annual"] if cycle == "annual" else catalog["stripe_price_monthly"]
+    _, stripe_key, _ = CYCLE_KEYS[cycle]
+    price_id = catalog[stripe_key]
     session = stripe.checkout.Session.create(
         mode="subscription", customer_email=customer_email, line_items=[{"price": price_id, "quantity": 1}],
         success_url=f"{FRONTEND_ORIGIN}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
@@ -61,9 +84,12 @@ def create_stripe_checkout(org: Organization, plan: str, cycle: str, customer_em
 
 def create_paystack_checkout(org: Organization, plan: str, cycle: str, customer_email: str) -> str:
     if not PAYSTACK_SECRET_KEY:
-        raise BillingNotConfigured("Paystack isn't connected yet — this account remains on its free trial.")
+        raise BillingNotConfigured("Paystack isn't connected yet — please try again shortly or contact support.")
+    if cycle not in CYCLE_KEYS:
+        raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
     catalog = PLAN_CATALOG[plan]
-    plan_code = catalog["paystack_plan_annual"] if cycle == "annual" else catalog["paystack_plan_monthly"]
+    _, _, paystack_key = CYCLE_KEYS[cycle]
+    plan_code = catalog[paystack_key]
     resp = httpx.post("https://api.paystack.co/transaction/initialize",
                       headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"},
                       json={"email": customer_email, "plan": plan_code,

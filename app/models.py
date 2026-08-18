@@ -49,10 +49,11 @@ class Organization(Base):
     billing_provider: Mapped[str] = mapped_column(String(20), default="")   # 'stripe' | 'paystack' | '' (never paid)
     billing_customer_id: Mapped[str] = mapped_column(String(120), default="")
     billing_subscription_id: Mapped[str] = mapped_column(String(120), default="")
-    billing_status: Mapped[str] = mapped_column(String(20), default="trialing")
-    # 'trialing' | 'active' | 'past_due' | 'expired' | 'cancelled' — see services/billing.py
-    trial_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    trial_reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    billing_status: Mapped[str] = mapped_column(String(20), default="unpaid")
+    # 'unpaid' (default — hard-gated, no access until payment) | 'active' | 'past_due' | 'cancelled' | 'exempt' (admin only, never gated)
+    view_as_plan: Mapped[str] = mapped_column(String(20), nullable=True)
+    # Admin-only "View As" simulator — when set, UI and limits reflect this tier instead of `plan`,
+    # while billing_status='exempt' still always bypasses payment regardless of which tier is simulated.
     plan_activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     plan_cancelled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     read_only_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -102,6 +103,21 @@ class OrgInvite(Base):
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PasswordResetToken(Base):
+    """Single-use, expiring reset token, emailed to the account's own address
+    only — never echoed back to the requesting browser session, since unlike
+    a team invite (where the account doesn't exist yet), this protects
+    access to an account that already exists."""
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    member_id: Mapped[str] = mapped_column(ForeignKey("org_members.id"), index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 

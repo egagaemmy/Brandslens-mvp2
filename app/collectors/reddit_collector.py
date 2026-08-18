@@ -6,6 +6,7 @@ import time
 import httpx
 from ..config import REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
 from ..models import Workspace
+from ..services.pipeline import search_terms
 
 log = logging.getLogger("collector.reddit")
 _token_cache = {"token": None, "expires": 0}
@@ -34,10 +35,12 @@ def collect(db, ws: Workspace) -> list[dict]:
     if not token:
         log.info("Reddit not configured — skipping (set REDDIT_CLIENT_ID/SECRET)")
         return []
+    terms = search_terms(ws)
+    query = " OR ".join(f'"{t}"' for t in terms)
     try:
         r = httpx.get("https://oauth.reddit.com/search",
                       headers={"Authorization": f"bearer {token}", "User-Agent": REDDIT_USER_AGENT},
-                      params={"q": ws.name, "sort": "new", "limit": 25}, timeout=20)
+                      params={"q": query, "sort": "new", "limit": 25}, timeout=20)
         r.raise_for_status()
         posts = r.json().get("data", {}).get("children", [])
     except Exception:  # noqa: BLE001

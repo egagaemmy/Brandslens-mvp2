@@ -13,7 +13,7 @@ fraud allegations, regulatory escalation, and other people's brand data.
 ## 1. Who this agreement is with
 
 These Terms govern access to and use of BrandsLens (the "Service"), provided
-by [YOUR LEGAL ENTITY NAME] ("BrandsLens," "we," "us"). By creating an account,
+by BrandsLens Limited ("BrandsLens," "we," "us"). By creating an account,
 you agree to these Terms on behalf of yourself and the organization you
 represent (the "Customer").
 
@@ -121,7 +121,7 @@ Owners with reasonable notice before taking effect.
 
 ## 14. Contact
 
-[YOUR LEGAL ENTITY NAME]
+BrandsLens Limited
 [Registered address]
 [Support email]
 

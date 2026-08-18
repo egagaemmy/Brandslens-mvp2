@@ -31,7 +31,8 @@ X_BEARER_TOKEN = env("X_BEARER_TOKEN")
 
 # --- Alerts ---
 RESEND_API_KEY = env("RESEND_API_KEY")
-MAIL_FROM = env("MAIL_FROM", "watch@brandseye.app")
+MAIL_FROM = env("MAIL_FROM", "watch@brandslens.app")
+ENTERPRISE_INQUIRY_EMAIL = env("ENTERPRISE_INQUIRY_EMAIL", "kgrnigeria@gmail.com")
 SLACK_WEBHOOK_DEFAULT = env("SLACK_WEBHOOK_DEFAULT")
 
 # --- Billing — optional. Organizations simply stay 'trialing' until these exist. ---
@@ -42,6 +43,7 @@ PAYSTACK_SECRET_KEY = env("PAYSTACK_SECRET_KEY")
 # --- Cadence (minutes) ---
 CADENCE_NEWS = int(env("CADENCE_NEWS", "20"))
 CADENCE_NAIRALAND = int(env("CADENCE_NAIRALAND", "45"))
+CADENCE_HACKERNEWS = int(env("CADENCE_HACKERNEWS", "20"))
 CADENCE_REDDIT = int(env("CADENCE_REDDIT", "20"))
 CADENCE_YOUTUBE = int(env("CADENCE_YOUTUBE", "60"))
 CADENCE_DOMAINS = int(env("CADENCE_DOMAINS", "1440"))

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import httpx
 import feedparser
 from ..models import Workspace
+from ..services.pipeline import search_terms
 
 log = logging.getLogger("collector.news")
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
@@ -14,8 +15,10 @@ def collect(db, ws: Workspace) -> list[dict]:
     return _gdelt(ws) + _rss(ws)
 
 def _gdelt(ws: Workspace) -> list[dict]:
+    terms = search_terms(ws)
+    query = "(" + " OR ".join(f'"{t}"' for t in terms) + ")"
     try:
-        r = httpx.get(GDELT_URL, params={"query": f'"{ws.name}"', "mode": "artlist",
+        r = httpx.get(GDELT_URL, params={"query": query, "mode": "artlist",
                                          "format": "json", "maxrecords": 30, "timespan": "1d"}, timeout=30)
         r.raise_for_status()
         arts = r.json().get("articles", [])

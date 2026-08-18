@@ -30,18 +30,19 @@ def require_role(*roles: str):
 
 
 def active_member(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> OrgMember:
-    """Same as current_member, but additionally blocks access once a trial
-    has expired and no payment has been made. Deliberately NOT used by the
-    /api/auth/* or /api/billing/* routes — someone who's locked out must
-    still be able to log in and pay to unlock themselves; only the actual
-    product data (workspaces, incidents, Media Room, reports, team) is
-    gated by this."""
+    """Same as current_member, but additionally enforces the paywall: no
+    free trial — an organization starts 'unpaid' and stays gated until a
+    real payment succeeds. The one exception is billing_status='exempt',
+    reserved for the single admin account created via
+    scripts/create_admin.py — never reachable through public signup.
+    Deliberately NOT used by /api/auth/* or /api/billing/* routes — someone
+    who's locked out must still be able to log in and pay to unlock
+    themselves; only actual product data is gated by this."""
     org = db.get(Organization, member.organization_id)
-    if org.billing_status == "trialing" and org.trial_ends_at and aware(org.trial_ends_at) < now_utc():
-        org.billing_status = "expired"
-        db.commit()
-    if org.billing_status in ("expired", "cancelled"):
-        raise HTTPException(402, "Your free trial has ended. Subscribe to keep using BrandsLens.")
+    if org.billing_status == "exempt":
+        return member
+    if org.billing_status != "active":
+        raise HTTPException(402, "Payment required to activate your BrandsLens account.")
     return member
 
 

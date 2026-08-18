@@ -24,13 +24,13 @@ from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
-from .collectors import news_collector, nairaland_collector, reddit_collector, youtube_collector, domain_collector, x_collector
+from .collectors import news_collector, nairaland_collector, hackernews_collector, reddit_collector, youtube_collector, domain_collector, x_collector
 
 app = FastAPI(title=APP_NAME)
 app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_ORIGIN] if FRONTEND_ORIGIN != "*" else ["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
-COLLECTORS = [news_collector, nairaland_collector, reddit_collector, youtube_collector, domain_collector, x_collector]
+COLLECTORS = [news_collector, nairaland_collector, hackernews_collector, reddit_collector, youtube_collector, domain_collector, x_collector]
 ROLE_LABEL = {"owner": "Owner", "lead": "Team Lead", "member": "Team Member"}
 
 # The full source catalog — shown to users so they know exactly where mentions
@@ -39,8 +39,10 @@ ROLE_LABEL = {"owner": "Owner", "lead": "Team Lead", "member": "Team Member"}
 SOURCE_CATALOG = [
     {"key": "news", "label": "News (GDELT + RSS)", "requires_key": False},
     {"key": "nairaland", "label": "Nairaland", "requires_key": False},
+    {"key": "hackernews", "label": "Hacker News", "requires_key": False},
     {"key": "domain", "label": "Look-alike Domain Watch", "requires_key": False},
-    {"key": "reddit", "label": "Reddit", "requires_key": True, "env": "REDDIT_CLIENT_ID"},
+    {"key": "reddit", "label": "Reddit", "requires_key": True, "env": "REDDIT_CLIENT_ID",
+     "note": "Requires Reddit's written commercial-use approval (Responsible Builder Policy) — applied for, not yet guaranteed"},
     {"key": "youtube", "label": "YouTube", "requires_key": True, "env": "YOUTUBE_API_KEY"},
     {"key": "telegram", "label": "Telegram channels", "requires_key": True, "env": "TELEGRAM_API_ID"},
     {"key": "x", "label": "X (Twitter)", "requires_key": True, "env": "X_ENABLED", "note": "Off until enabled — see architecture blueprint"},
@@ -60,6 +62,7 @@ def _startup() -> None:
 class SignupBody(BaseModel):
     company: str
     sector: str = "General"
+    plan: str = "standard"
     name: str
     email: str
     password: str
@@ -68,7 +71,7 @@ class SignupBody(BaseModel):
 @app.post("/api/auth/signup")
 def signup(body: SignupBody, db: Session = Depends(get_db)) -> dict:
     try:
-        member, token = auth.signup(db, body.company, body.sector, "professional", body.name, body.email, body.password)
+        member, token = auth.signup(db, body.company, body.sector, body.plan, body.name, body.email, body.password)
     except AuthError as e:
         raise HTTPException(422, str(e))
     ws = db.scalar(select(Workspace).where(Workspace.organization_id == member.organization_id))
@@ -95,6 +98,39 @@ def logout(request: Request, db: Session = Depends(get_db)) -> dict:
     token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     if token:
         auth.revoke_session(db, token)
+    return {"ok": True}
+
+
+class ForgotPasswordBody(BaseModel):
+    email: str
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(body: ForgotPasswordBody, db: Session = Depends(get_db)) -> dict:
+    """Always returns the identical response whether or not the email
+    exists — that's deliberate, not an oversight. If this told you 'no
+    account found,' anyone could use it to check who has a BrandsLens
+    account just by trying emails."""
+    token = auth.request_password_reset(db, body.email)
+    if token:
+        from .services.mailer import send_password_reset
+        member = db.scalar(select(OrgMember).where(OrgMember.email == body.email.lower()))
+        reset_link = f"{FRONTEND_ORIGIN}/?reset_token={token}"
+        send_password_reset(member.email, member.name, reset_link)
+    return {"ok": True, "message": "If that email has a BrandsLens account, a reset link is on its way."}
+
+
+class ResetPasswordBody(BaseModel):
+    token: str
+    password: str
+
+
+@app.post("/api/auth/reset-password")
+def reset_password_route(body: ResetPasswordBody, db: Session = Depends(get_db)) -> dict:
+    try:
+        auth.reset_password(db, body.token, body.password)
+    except AuthError as e:
+        raise HTTPException(422, str(e))
     return {"ok": True}
 
 
@@ -395,19 +431,36 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)) -> d
         raise HTTPException(400, "Invalid signature")
 
 
-def _trial_dict(org: Organization) -> dict:
-    remaining_hours = None
-    if org.trial_ends_at:
-        remaining_hours = round((aware(org.trial_ends_at) - now_utc()).total_seconds() / 3600, 1)
-    return {"trial_ends_at": org.trial_ends_at.isoformat() if org.trial_ends_at else None,
-           "trial_remaining_hours": remaining_hours}
+def _plan_dict(org: Organization) -> dict:
+    from .services.auth import effective_plan, PLAN_WORKSPACE_LIMIT, PLAN_KEYWORD_LIMIT
+    eff = effective_plan(org)
+    return {"real_plan": org.plan, "effective_plan": eff, "is_admin_view_as": org.view_as_plan is not None,
+           "effective_workspace_limit": PLAN_WORKSPACE_LIMIT[eff], "effective_keyword_limit": PLAN_KEYWORD_LIMIT[eff],
+           "is_exempt": org.billing_status == "exempt"}
+
+
+class ViewAsBody(BaseModel):
+    plan: str | None = None  # None resets to the real (unlimited) view
+
+
+@app.post("/api/admin/view-as")
+def view_as(body: ViewAsBody, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+    """Only ever meaningful for the exempt admin account — everyone else's
+    organization has billing_status != 'exempt', so auth.set_view_as raises
+    for them before anything changes."""
+    org = db.get(Organization, member.organization_id)
+    try:
+        auth.set_view_as(db, org, body.plan)
+    except AuthError as e:
+        raise HTTPException(403, str(e))
+    return _plan_dict(org)
 
 
 @app.get("/api/billing/status")
 def billing_status(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
     org = db.get(Organization, member.organization_id)
     return {"plan": org.plan, "status": org.billing_status, "workspace_limit": org.workspace_limit,
-           "keyword_limit": org.keyword_limit, **_trial_dict(org)}
+           "keyword_limit": org.keyword_limit, **_plan_dict(org)}
 
 
 @app.get("/api/me")
@@ -417,7 +470,7 @@ def get_me(member: OrgMember = Depends(current_member), db: Session = Depends(ge
     return {
         "member": _member_dict(member),
         "organization": {"id": org.id, "name": org.name, "plan": org.plan, "billing_status": org.billing_status,
-                         "workspace_limit": org.workspace_limit, "keyword_limit": org.keyword_limit, **_trial_dict(org)},
+                         "workspace_limit": org.workspace_limit, "keyword_limit": org.keyword_limit, **_plan_dict(org)},
         "workspaces": [{"id": w.id, "name": w.name, "sector": w.sector} for w in workspaces],
     }
 
@@ -447,10 +500,11 @@ def update_my_profile(body: ProfileUpdateBody, member: OrgMember = Depends(curre
 
 
 # ==================================================================
-# SOURCES — full transparency on where mentions come from
+# SOURCES — subscribers only ever see what's genuinely active; the full
+# picture (pending approvals, why something's off) is internal knowledge,
+# visible only through the admin-only endpoint below.
 # ==================================================================
-@app.get("/api/sources")
-def list_sources() -> list[dict]:
+def _source_status() -> list[dict]:
     import os
     out = []
     for s in SOURCE_CATALOG:
@@ -461,6 +515,41 @@ def list_sources() -> list[dict]:
             active = False
         out.append({"key": s["key"], "label": s["label"], "active": active, "note": s.get("note", "")})
     return out
+
+
+@app.get("/api/sources")
+def list_sources(member: OrgMember = Depends(active_member)) -> list[dict]:
+    """What subscribers see: active sources only, no notes about anything
+    pending, restricted, or off — that's internal-only, not customer-facing."""
+    return [{"key": s["key"], "label": s["label"]} for s in _source_status() if s["active"]]
+
+
+@app.get("/api/admin/sources")
+def list_sources_internal(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> list[dict]:
+    """The full picture — every source, active or not, with the real reason
+    why. Restricted to the exempt admin account; everyone else gets a 403,
+    not a filtered response, since this is internal knowledge, not something
+    to selectively redact for other roles."""
+    org = db.get(Organization, member.organization_id)
+    if org.billing_status != "exempt":
+        raise HTTPException(403, "Internal source status is admin-only.")
+    return _source_status()
+
+
+class EnterpriseInquiryBody(BaseModel):
+    name: str
+    email: str
+    company: str
+    message: str = ""
+
+
+@app.post("/api/enterprise-inquiry")
+def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
+    """Public, unauthenticated — this is the entire 'checkout flow' for
+    Enterprise, since there's no fixed price to charge a card against."""
+    from .services.billing import submit_enterprise_inquiry
+    sent = submit_enterprise_inquiry(body.name, body.email, body.company, body.message)
+    return {"ok": True, "sent": sent}
 
 
 @app.get("/api/health")

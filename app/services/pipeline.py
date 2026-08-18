@@ -25,6 +25,22 @@ def _keyword_prefilter(ws: Workspace, text: str) -> bool:
     return any(t.lower() in lower for t in (ws.brand_tokens or []) + (ws.keywords or []))
 
 
+def search_terms(ws: Workspace, limit: int = 12) -> list[str]:
+    """The brand name plus every tracked keyword — campaign names, product
+    names, anything unrelated to the brand itself that's been added in
+    Settings. Every search-based collector (news, Reddit, Nairaland, YouTube)
+    reads from this single shared list, so adding a keyword once in Settings
+    makes every source search for it, not just filter for it afterward."""
+    terms = [ws.name] + list(ws.keywords or [])
+    seen, out = set(), []
+    for t in terms:
+        key = t.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(t.strip())
+    return out[:limit]
+
+
 def _next_ref(db: Session, ws: Workspace) -> str:
     n = db.scalar(select(func.count(Incident.id)).where(Incident.workspace_id == ws.id)) or 0
     prefix = "".join(c for c in ws.name.upper() if c.isalpha())[:4] or "WS"

@@ -46,23 +46,26 @@ def _wrap(inner: str) -> str:
     </div>"""
 
 
-def send_trial_reminder(to: str, name: str, org_name: str, hours_left: float) -> bool:
+def send_password_reset(to: str, name: str, reset_link: str) -> bool:
     body = _wrap(f"""<p>Hi {name},</p>
-      <p>Your BrandsLens free trial for <b>{org_name}</b> ends in about
-      <b>{max(1, round(hours_left))} hours</b>. Subscribe now to keep monitoring, without any
-      gap in coverage.</p>
-      <p><a href="#" style="background:#{BRAND['amber']};color:#0B0F17;padding:10px 20px;
-      border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Subscribe now</a></p>""")
-    return send_email(to, "Your BrandsLens trial ends soon", body)
+      <p>Someone requested a password reset for your BrandsLens account. If this was you,
+      click below to choose a new password — this link works once and expires in 2 hours.</p>
+      <p><a href="{reset_link}" style="background:#{BRAND['amber']};color:#0B0F17;padding:10px 20px;
+      border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Reset your password</a></p>
+      <p style="color:#94A3B8;font-size:12px">If you didn't request this, you can safely ignore this email —
+      your password hasn't been changed.</p>""")
+    return send_email(to, "Reset your BrandsLens password", body)
 
 
-def send_trial_expired(to: str, name: str, org_name: str) -> bool:
-    body = _wrap(f"""<p>Hi {name},</p>
-      <p>Your BrandsLens free trial for <b>{org_name}</b> has ended. Monitoring is paused
-      until you subscribe — your data is safe and waiting for you.</p>
-      <p><a href="#" style="background:#{BRAND['amber']};color:#0B0F17;padding:10px 20px;
-      border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Reactivate your account</a></p>""")
-    return send_email(to, "Your BrandsLens trial has ended", body)
+def send_enterprise_inquiry(name: str, email: str, company: str, message: str) -> bool:
+    """Enterprise has no self-serve checkout — this is the entire 'purchase
+    flow' for that tier: a real message, to a real inbox, to start a real
+    conversation about custom pricing."""
+    from ..config import ENTERPRISE_INQUIRY_EMAIL
+    body = _wrap(f"""<p><b>New Enterprise inquiry</b></p>
+      <p><b>Name:</b> {name}<br><b>Email:</b> {email}<br><b>Company:</b> {company}</p>
+      <p><b>Message:</b><br>{message}</p>""")
+    return send_email(ENTERPRISE_INQUIRY_EMAIL, f"Enterprise inquiry from {company}", body)
 
 
 def send_payment_failed(to: str, name: str, org_name: str) -> bool:

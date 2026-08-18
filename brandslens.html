@@ -146,7 +146,7 @@ a{color:inherit;text-decoration:none}
 .price-band{background:var(--off-white);border-radius:24px;padding:6vw 5vw;color:var(--text)}
 .price-band .lp-h2{color:var(--navy)}
 .price-band .lp-section-sub{color:var(--slate)}
-.price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:44px}
+.price-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:44px}
 .price-card{background:#fff;border:1.5px solid var(--line);border-radius:18px;padding:32px 26px;box-shadow:var(--shadow-sm)}
 .price-card.featured{border-color:var(--amber);box-shadow:0 0 0 5px rgba(245,158,11,.12),var(--shadow-md);position:relative}
 .price-badge{position:absolute;top:-13px;left:50%;transform:translateX(-50%);background:var(--amber-dark);color:#fff;font-size:11px;font-weight:700;padding:5px 16px;border-radius:20px;letter-spacing:.04em}
@@ -324,13 +324,6 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
 .dr-meta .m-val{font-size:13.5px;font-weight:700;margin-top:2px}
 .dr-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:22px}
 
-/* ============ TRIAL BANNER ============ */
-.trial-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#FFFBEB,#FFF7ED);border:1px solid #FCD34D;border-radius:12px;padding:12px 18px;margin-bottom:18px}
-.trial-banner.urgent{background:linear-gradient(135deg,#FEF2F2,#FEF2F2);border-color:#FCA5A5}
-.trial-banner b{color:var(--amber-dark)}
-.trial-banner.urgent b{color:var(--red)}
-.trial-banner p{font-size:12.5px;color:var(--slate);margin-top:2px}
-
 /* ============ PAYWALL ============ */
 .paywall-wrap{min-height:100vh;background:var(--navy-dark);display:flex;align-items:center;justify-content:center;padding:40px}
 .paywall-card{max-width:680px;text-align:center;color:#fff}
@@ -342,6 +335,17 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
 .paywall-plan.featured{border-color:var(--amber);background:rgba(245,158,11,.08)}
 .paywall-plan h4{font-family:var(--serif);font-size:18px;margin-bottom:6px}
 .paywall-plan .amt{font-family:var(--serif);font-size:26px;color:var(--amber);margin-bottom:12px}
+
+/* ============ PRICE CYCLE SWITCH (annual/monthly/daily) ============ */
+.price-switch{display:flex;align-items:center;justify-content:center;gap:14px}
+.price-switch span{font-size:13px;font-weight:700;color:rgba(255,255,255,.5);cursor:pointer;transition:.15s}
+.price-switch span.active{color:#fff}
+.price-switch .save-tag{font-size:10px;color:var(--amber);margin-left:4px}
+.switch-track{width:70px;height:28px;background:rgba(255,255,255,.12);border-radius:20px;position:relative;cursor:pointer;flex-shrink:0}
+.switch-track::before{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:var(--amber);transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
+.switch-track[data-pos="0"]::before{transform:translateX(0)}
+.switch-track[data-pos="1"]::before{transform:translateX(22px)}
+.switch-track[data-pos="2"]::before{transform:translateX(44px)}
 
 /* ============ PROFILE ============ */
 .avatar-upload{display:flex;align-items:center;gap:20px;margin-bottom:24px}
@@ -505,45 +509,71 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
       <div class="lp-section-head reveal">
         <div class="lp-kicker">Investment</div>
         <h2 class="lp-h2">Plans built for how exposed you actually are.</h2>
-        <p class="lp-section-sub">Annual pricing shown. Monthly billing available at a 15% premium across all tiers.</p>
+        <p class="lp-section-sub">Payment activates your account immediately — choose how you'd like to pay.</p>
+      </div>
+      <div class="price-switch" id="lpCycleToggle" style="margin-bottom:8px">
+        <span class="active" data-cycle="annual" style="color:var(--navy)">Annual <span class="save-tag">best value</span></span>
+        <div class="switch-track" id="lpSwitchTrack" data-pos="0"></div>
+        <span data-cycle="monthly" style="color:var(--slate)">Monthly</span>
+        <span data-cycle="daily" style="color:var(--slate)">Daily</span>
       </div>
       <div class="price-grid reveal">
         <div class="price-card">
-          <h3>Professional</h3>
-          <div class="amt">$1,500<span>/yr</span></div>
-          <div class="amt-sub">≈ $143.80/mo billed annually</div>
+          <h3>Standard</h3>
+          <div class="amt" data-lp-amt="standard">$1,500<span>/yr</span></div>
+          <div class="amt-sub" data-lp-sub="standard">≈ $143.75/mo billed annually</div>
           <ul class="price-list">
             <li><b>✓</b>1 workspace</li>
             <li><b>✓</b>25 tracked keywords</li>
             <li><b>✓</b>Media Room + SLA clock</li>
             <li><b>✓</b>Branded PDF &amp; Excel reports</li>
           </ul>
-          <button class="btn btn-outline btn-block plan-select" data-plan="professional">Start now</button>
+          <button class="btn btn-outline btn-block plan-select" data-plan="standard">Start now</button>
         </div>
-        <div class="price-card featured">
-          <span class="price-badge">Most popular</span>
-          <h3>Corporate Growth</h3>
-          <div class="amt">$2,500<span>/yr</span></div>
-          <div class="amt-sub">≈ $239.60/mo billed annually</div>
+        <div class="price-card">
+          <h3>Growth</h3>
+          <div class="amt" data-lp-amt="growth">$2,500<span>/yr</span></div>
+          <div class="amt-sub" data-lp-sub="growth">≈ $239.58/mo billed annually</div>
           <ul class="price-list">
-            <li><b>✓</b>3 workspaces</li>
+            <li><b>✓</b>5 workspaces</li>
             <li><b>✓</b>Unlimited keywords</li>
             <li><b>✓</b>Look-alike domain watch</li>
             <li><b>✓</b>Full analytics &amp; reporting suite</li>
           </ul>
-          <button class="btn btn-amber btn-block plan-select" data-plan="corp_growth">Start now</button>
+          <button class="btn btn-outline btn-block plan-select" data-plan="growth">Start now</button>
         </div>
-        <div class="price-card">
-          <h3>Enterprise</h3>
-          <div class="amt">$3,500<span>/yr</span></div>
-          <div class="amt-sub">≈ $335.42/mo billed annually</div>
+        <div class="price-card featured">
+          <span class="price-badge">Most popular</span>
+          <h3>Professional</h3>
+          <div class="amt" data-lp-amt="professional">$3,500<span>/yr</span></div>
+          <div class="amt-sub" data-lp-sub="professional">≈ $335.42/mo billed annually</div>
           <ul class="price-list">
-            <li><b>✓</b>Unlimited workspaces</li>
+            <li><b>✓</b>10 workspaces</li>
             <li><b>✓</b>Unlimited keywords</li>
-            <li><b>✓</b>Priority SLA &amp; support</li>
+            <li><b>✓</b>Priority support</li>
             <li><b>✓</b>Dedicated onboarding</li>
           </ul>
-          <button class="btn btn-outline btn-block plan-select" data-plan="enterprise">Talk to us</button>
+          <button class="btn btn-amber btn-block plan-select" data-plan="professional">Start now</button>
+        </div>
+        <div class="price-card" id="enterpriseCard">
+          <h3>Enterprise</h3>
+          <div class="amt" style="font-size:26px">Custom quote</div>
+          <div class="amt-sub">Priced to the extent of the work</div>
+          <ul class="price-list">
+            <li><b>✓</b>Unlimited everything</li>
+            <li><b>✓</b>Custom terms &amp; SLAs</li>
+            <li><b>✓</b>Dedicated account team</li>
+            <li><b>✓</b>Tailored onboarding</li>
+          </ul>
+          <button class="btn btn-outline btn-block" id="showEnterpriseFormBtn">Get a quote</button>
+          <div id="enterpriseFormWrap" style="display:none;text-align:left;margin-top:14px">
+            <div class="form-field"><label>Name</label><input id="entName" placeholder="Your name"></div>
+            <div class="form-field"><label>Email</label><input id="entEmail" type="email" placeholder="you@company.com"></div>
+            <div class="form-field"><label>Company</label><input id="entCompany" placeholder="Company name"></div>
+            <div class="form-field"><label>Message</label><textarea id="entMessage" rows="3" placeholder="What are you looking to monitor?" style="width:100%;padding:10px;border:1.5px solid var(--line);border-radius:8px"></textarea></div>
+            <div class="auth-err" id="entErr" style="display:none"></div>
+            <button class="btn btn-amber btn-block btn-sm" id="entSubmitBtn">Send inquiry</button>
+          </div>
         </div>
       </div>
     </div>
@@ -558,7 +588,7 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
       </div>
     </div>
     <div class="lp-footer-meta">
-      <span>© 2026 BrandsLens, a Mediacraft Associates company</span>
+      <span>© 2026 BrandsLens Limited</span>
       <span>Clarity · Trust · Intelligence · Protection · Impact</span>
     </div>
   </footer>
@@ -581,6 +611,7 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
         <div class="form-field"><label>Work email</label><input id="liEmail" type="email" placeholder="you@company.com"></div>
         <div class="form-field"><label>Password</label><input id="liPass" type="password" placeholder="••••••••"></div>
         <button class="btn btn-navy btn-block" id="liSubmit">Log in</button>
+        <div class="auth-foot"><a href="#" id="toForgotPassword" style="color:var(--slate)">Forgot your password?</a></div>
         <div class="auth-foot">No account yet? <a href="#" id="toSignup" style="color:var(--amber-dark);font-weight:700">Start now</a></div>
         <div class="auth-foot"><a href="#" id="loginToLanding" style="color:var(--slate)">← Back to homepage</a></div>
       </div>
@@ -610,11 +641,16 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
           <select id="suSector"><option>Financial Services</option><option>Fintech / Payments</option><option>FMCG &amp; Food</option>
             <option>Energy &amp; Capital Markets</option><option>Telecommunications</option><option>Industrial Services</option>
             <option>Insurance</option><option>Real Estate</option><option>Government / Public Sector</option><option>Other</option></select></div>
-        <div class="card" style="background:#FFFBEB;border-color:#FCD34D;padding:14px;margin-bottom:16px">
-          <b style="color:var(--amber-dark);font-size:12.5px">3-day free trial · Professional plan</b>
-          <p style="font-size:11.5px;color:var(--slate);margin-top:3px">No card required. Upgrade anytime from Billing once you're ready.</p>
+        <div class="form-field"><label>Plan</label>
+          <div class="plan-pick">
+            <label><input type="radio" name="suPlan" value="standard"><span>Standard</span></label>
+            <label><input type="radio" name="suPlan" value="growth" checked><span>Growth</span></label>
+            <label><input type="radio" name="suPlan" value="professional"><span>Professional</span></label>
+          </div></div>
+        <div class="card" style="background:#EFF6FF;border-color:#BFDBFE;padding:14px;margin-bottom:16px">
+          <p style="font-size:11.5px;color:var(--slate)">Payment is required to activate your account — you'll choose Annual, Monthly, or Daily billing on the next screen. Need Enterprise instead? <a href="#lp-pricing" onclick="showScreen('screen-landing')" style="color:var(--amber-dark);font-weight:700">Talk to us</a>.</p>
         </div>
-        <button class="btn btn-amber btn-block" id="suSubmit">Start my free trial</button>
+        <button class="btn btn-amber btn-block" id="suSubmit">Continue to payment</button>
         <div class="auth-foot">Already have an account? <a href="#" id="toLogin" style="color:var(--amber-dark);font-weight:700">Log in</a></div>
         <div class="auth-foot"><a href="#" id="suToLanding" style="color:var(--slate)">← Back to homepage</a></div>
       </div>
@@ -622,19 +658,73 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
   </div>
 </div>
 
-<!-- ================= PAYWALL (trial expired) ================= -->
+<!-- ================= FORGOT PASSWORD ================= -->
+<div class="screen" id="screen-forgot">
+  <div class="auth-wrap">
+    <div class="auth-side">
+      <div class="hero-glow"></div>
+      <div class="logo-lockup" style="position:relative;z-index:1"><svg width="26" height="26"><use href="#lensMark"/></svg><span class="logo-word on-dark" style="font-size:19px">Brands<span class="lens">Lens</span></span></div>
+      <p class="auth-side-quote">Locked out happens.<br><span class="amber-i">Getting back in shouldn't be hard.</span></p>
+    </div>
+    <div class="auth-form-wrap">
+      <div class="auth-card">
+        <h2>Reset your password</h2>
+        <div class="sub">Enter your account email and we'll send a reset link.</div>
+        <div class="auth-err" id="forgotErr"></div>
+        <div id="forgotFormWrap">
+          <div class="form-field"><label>Work email</label><input id="forgotEmail" type="email" placeholder="you@company.com"></div>
+          <button class="btn btn-navy btn-block" id="forgotSubmit">Send reset link</button>
+        </div>
+        <div id="forgotSentWrap" style="display:none;text-align:center;padding:20px 0">
+          <div style="font-size:32px;margin-bottom:10px">✓</div>
+          <p style="font-size:13.5px;color:var(--slate)">If that email has a BrandsLens account, a reset link is on its way. Check your inbox.</p>
+        </div>
+        <div class="auth-foot"><a href="#" id="forgotToLogin" style="color:var(--slate)">← Back to log in</a></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= RESET PASSWORD ================= -->
+<div class="screen" id="screen-reset">
+  <div class="auth-wrap">
+    <div class="auth-side">
+      <div class="hero-glow"></div>
+      <div class="logo-lockup" style="position:relative;z-index:1"><svg width="26" height="26"><use href="#lensMark"/></svg><span class="logo-word on-dark" style="font-size:19px">Brands<span class="lens">Lens</span></span></div>
+      <p class="auth-side-quote">Choose a new password.<br><span class="amber-i">One click and you're back in.</span></p>
+    </div>
+    <div class="auth-form-wrap">
+      <div class="auth-card">
+        <h2>Choose a new password</h2>
+        <div class="sub">This link works once and expires in 2 hours.</div>
+        <div class="auth-err" id="resetErr"></div>
+        <div class="form-field"><label>New password</label><input id="resetPass" type="password" placeholder="At least 8 characters"></div>
+        <button class="btn btn-amber btn-block" id="resetSubmit">Set new password</button>
+        <div class="auth-foot"><a href="#" id="resetToLogin" style="color:var(--slate)">← Back to log in</a></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PAYWALL (payment required — no free trial) ================= -->
 <div class="screen" id="screen-paywall">
   <div class="paywall-wrap"><div class="paywall-card">
     <svg width="52" height="52"><use href="#lensMark"/></svg>
-    <h2>Your free trial has ended</h2>
-    <p class="sub">Your data is safe and waiting — subscribe to pick up right where you left off.</p>
+    <h2 id="paywallHeading">One step left</h2>
+    <p class="sub" id="paywallSub">Choose how you'd like to pay to activate your BrandsLens account.</p>
+    <div class="price-switch" id="paywallCycleToggle" style="margin-bottom:22px">
+      <span class="active" data-cycle="annual">Annual <span class="save-tag">best value</span></span>
+      <div class="switch-track" id="paywallSwitchTrack" data-pos="0"></div>
+      <span data-cycle="monthly">Monthly</span>
+      <span data-cycle="daily">Daily</span>
+    </div>
     <div class="paywall-plans">
-      <div class="paywall-plan"><h4>Professional</h4><div class="amt">$1,500<span style="font-size:12px">/yr</span></div>
+      <div class="paywall-plan" data-plan-card="standard"><h4>Standard</h4><div class="amt" data-paywall-amt="standard">$1,500<span style="font-size:12px">/yr</span></div>
+        <button class="btn btn-outline btn-block btn-sm" data-paywall-checkout="standard">Subscribe</button></div>
+      <div class="paywall-plan featured" data-plan-card="growth"><h4>Growth</h4><div class="amt" data-paywall-amt="growth">$2,500<span style="font-size:12px">/yr</span></div>
+        <button class="btn btn-amber btn-block btn-sm" data-paywall-checkout="growth">Subscribe</button></div>
+      <div class="paywall-plan" data-plan-card="professional"><h4>Professional</h4><div class="amt" data-paywall-amt="professional">$3,500<span style="font-size:12px">/yr</span></div>
         <button class="btn btn-outline btn-block btn-sm" data-paywall-checkout="professional">Subscribe</button></div>
-      <div class="paywall-plan featured"><h4>Corporate Growth</h4><div class="amt">$2,500<span style="font-size:12px">/yr</span></div>
-        <button class="btn btn-amber btn-block btn-sm" data-paywall-checkout="corp_growth">Subscribe</button></div>
-      <div class="paywall-plan"><h4>Enterprise</h4><div class="amt">$3,500<span style="font-size:12px">/yr</span></div>
-        <button class="btn btn-outline btn-block btn-sm" data-paywall-checkout="enterprise">Subscribe</button></div>
     </div>
     <button class="btn btn-ghost-dark btn-sm" id="paywallLogout">Log out</button>
   </div></div>
@@ -693,7 +783,6 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
       </div>
     </div>
     <div id="scanStatusBanner" style="display:none;margin-bottom:16px"></div>
-    <div id="trialBanner" style="display:none"></div>
 
     <!-- DASHBOARD -->
     <section data-tab="dashboard" class="active">
@@ -787,6 +876,7 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
         <h3>Where your mentions come from <span class="h-sub">live, honest status — not marketing claims</span></h3>
         <p style="font-size:12.5px;color:var(--slate);margin-bottom:18px">Every source below is either genuinely active right now, or clearly marked as not yet connected. Nothing here is exaggerated.</p>
         <div id="sourcesList"></div>
+        <div id="sourcesInternalPanel" class="card" style="display:none;margin-top:16px;border-color:var(--amber);background:#FFFBEB"></div>
       </div>
     </section>
 
@@ -907,7 +997,13 @@ function loadToken() { return localStorage.getItem("brandslens_token"); }
 function saveToken(t) { localStorage.setItem("brandslens_token", t); }
 function clearToken() { localStorage.removeItem("brandslens_token"); }
 
+let PENDING_RESET_TOKEN = null;
+
 async function bootstrapSession() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const resetToken = urlParams.get("reset_token");
+  if (resetToken) { PENDING_RESET_TOKEN = resetToken; showScreen("screen-reset"); return; }
+
   const token = loadToken();
   if (!token) { showScreen("screen-landing"); return; }
   SESSION = { token };
@@ -924,16 +1020,22 @@ async function bootstrapSession() {
 $("#suSubmit").onclick = async () => {
   const name = $("#suName").value.trim(), company = $("#suCompany").value.trim(),
         email = $("#suEmail").value.trim(), pass = $("#suPass").value, sector = $("#suSector").value;
+  const plan = document.querySelector('input[name="suPlan"]:checked').value;
   const err = $("#suErr"); err.style.display = "none";
   if (!name || !company || !email || !pass) { err.textContent = "Please fill in your name, company name, email and password."; err.style.display = "block"; return; }
   if (pass.length < 8) { err.textContent = "Password must be at least 8 characters."; err.style.display = "block"; return; }
   try {
-    const data = await api("/api/auth/signup", { method: "POST", body: { company, sector, name, email, password: pass } });
+    const data = await api("/api/auth/signup", { method: "POST", body: { company, sector, plan, name, email, password: pass } });
     saveToken(data.token);
     SESSION = { token: data.token, member: data.member };
     WORKSPACES = [{ id: data.workspace_id, name: company, sector }];
     ACTIVE_WS = data.workspace_id;
-    runOnboarding();
+    // No free access — every signup goes straight to payment. Pre-select the
+    // plan they just chose on the paywall's own plan cards.
+    showScreen("screen-paywall");
+    $("#paywallHeading").textContent = "One step left";
+    $("#paywallSub").textContent = `Choose how you'd like to pay to activate ${company}.`;
+    document.querySelectorAll("[data-plan-card]").forEach(c => c.style.outline = c.dataset.planCard === plan ? "2px solid var(--amber)" : "none");
   } catch (e) { err.textContent = e.message; err.style.display = "block"; }
 };
 
@@ -952,30 +1054,73 @@ $("#liSubmit").onclick = async () => {
   } catch (e) { err.textContent = e.message; err.style.display = "block"; }
 };
 
+/* ---- Forgot / Reset password ---- */
+$("#toForgotPassword").onclick = e => { e.preventDefault(); showScreen("screen-forgot"); };
+$("#forgotToLogin").onclick = e => { e.preventDefault(); showScreen("screen-login"); };
+$("#resetToLogin").onclick = e => { e.preventDefault(); showScreen("screen-login"); };
+
+$("#forgotSubmit").onclick = async () => {
+  const email = $("#forgotEmail").value.trim(), err = $("#forgotErr");
+  err.style.display = "none";
+  if (!email) { err.textContent = "Enter your email address."; err.style.display = "block"; return; }
+  try {
+    await api("/api/auth/forgot-password", { method: "POST", body: { email } });
+    $("#forgotFormWrap").style.display = "none";
+    $("#forgotSentWrap").style.display = "block";
+  } catch (e) { err.textContent = e.message; err.style.display = "block"; }
+};
+
+$("#resetSubmit").onclick = async () => {
+  const pass = $("#resetPass").value, err = $("#resetErr");
+  err.style.display = "none";
+  if (!PENDING_RESET_TOKEN) { err.textContent = "This reset link looks incomplete. Request a new one."; err.style.display = "block"; return; }
+  if (pass.length < 8) { err.textContent = "Password must be at least 8 characters."; err.style.display = "block"; return; }
+  try {
+    await api("/api/auth/reset-password", { method: "POST", body: { token: PENDING_RESET_TOKEN, password: pass } });
+    PENDING_RESET_TOKEN = null;
+    toast("Password updated", "You can now log in with your new password", "good");
+    showScreen("screen-login");
+  } catch (e) { err.textContent = e.message; err.style.display = "block"; }
+};
+
 $("#logoutBtn").onclick = () => { clearToken(); SESSION = null; showScreen("screen-landing"); toast("Logged out", "See you again soon"); };
 $("#paywallLogout").onclick = () => { clearToken(); SESSION = null; showScreen("screen-landing"); };
+
+/* ---- Paywall cycle toggle + checkout ---- */
+let paywallCycle = "annual";
+function updatePaywallPrices() {
+  document.querySelectorAll("[data-paywall-amt]").forEach(node => {
+    const p = node.dataset.paywallAmt, annual = PLAN_ANNUAL[p];
+    if (paywallCycle === "annual") node.innerHTML = `$${annual.toLocaleString()}<span style="font-size:12px">/yr</span>`;
+    else if (paywallCycle === "monthly") node.innerHTML = `$${Math.round(annual / 12 * 1.15).toLocaleString()}<span style="font-size:12px">/mo</span>`;
+    else node.innerHTML = `$${(annual / 365 * 1.20).toFixed(2)}<span style="font-size:12px">/day</span>`;
+  });
+}
+$("#paywallCycleToggle").addEventListener("click", e => {
+  const target = e.target.closest("[data-cycle]");
+  const pos = { annual: 0, monthly: 1, daily: 2 };
+  if (target) {
+    paywallCycle = target.dataset.cycle;
+    document.querySelectorAll("#paywallCycleToggle [data-cycle]").forEach(s => s.classList.toggle("active", s.dataset.cycle === paywallCycle));
+    $("#paywallSwitchTrack").dataset.pos = pos[paywallCycle];
+    updatePaywallPrices();
+    return;
+  }
+  if (e.target.closest("#paywallSwitchTrack")) {
+    const order = ["annual", "monthly", "daily"];
+    paywallCycle = order[(order.indexOf(paywallCycle) + 1) % 3];
+    document.querySelectorAll("#paywallCycleToggle [data-cycle]").forEach(s => s.classList.toggle("active", s.dataset.cycle === paywallCycle));
+    $("#paywallSwitchTrack").dataset.pos = pos[paywallCycle];
+    updatePaywallPrices();
+  }
+});
 document.querySelectorAll("[data-paywall-checkout]").forEach(b => b.onclick = async () => {
   try {
     const data = await api("/api/billing/checkout", { method: "POST", skipPaywall: true,
-      body: { plan: b.dataset.paywallCheckout, cycle: "annual", provider: "stripe" } });
+      body: { plan: b.dataset.paywallCheckout, cycle: paywallCycle, provider: "stripe" } });
     if (data.checkout_url) window.location.href = data.checkout_url;
   } catch (e) { toast("Billing not connected yet", e.message, "warn"); }
 });
-
-function renderTrialBanner() {
-  const banner = $("#trialBanner");
-  if (!SESSION.organization || SESSION.organization.billing_status !== "trialing" || SESSION.organization.trial_remaining_hours == null) {
-    banner.style.display = "none"; return;
-  }
-  const hrs = SESSION.organization.trial_remaining_hours;
-  const urgent = hrs <= 24;
-  const label = hrs <= 1 ? "less than an hour" : hrs < 24 ? `${Math.round(hrs)} hours` : `${Math.round(hrs / 24)} day${Math.round(hrs/24)===1?"":"s"}`;
-  banner.style.display = "block";
-  banner.innerHTML = `<div class="trial-banner ${urgent ? "urgent" : ""}">
-    <div><b>${label} left in your free trial</b><p>Subscribe now to keep monitoring without interruption.</p></div>
-    <button class="btn ${urgent ? "btn-navy" : "btn-outline"} btn-sm" onclick="switchTab('billing')">Upgrade Now</button>
-  </div>`;
-}
 
 function runOnboarding() {
   showScreen("screen-onboarding");
@@ -1003,7 +1148,6 @@ async function enterApp() {
   $("#acctRole").value = ROLE_LABEL[SESSION.member.role];
   renderWorkspaceSelector();
   applyPlanChrome();
-  renderTrialBanner();
   await switchTab("dashboard");
 }
 function renderWorkspaceSelector() {
@@ -1304,13 +1448,28 @@ $("#tmInviteBtn").onclick = async () => {
 /* =================== SOURCES =================== */
 async function renderSources() {
   let sources; try { sources = await api("/api/sources"); } catch (e) { toast("Couldn't load sources", e.message, "warn"); return; }
-  $("#sourcesList").innerHTML = sources.map(s => `
+  $("#sourcesList").innerHTML = sources.length ? sources.map(s => `
     <div class="source-card">
-      <span class="sc-dot ${s.active ? "active" : "inactive"}"></span>
-      <div><div class="sc-name">${esc(s.label)}</div>
-        ${s.note ? `<div class="sc-note">${esc(s.note)}</div>` : ""}</div>
-      <span class="sc-badge ${s.active ? "active" : "inactive"}">${s.active ? "Active" : "Not connected"}</span>
-    </div>`).join("");
+      <span class="sc-dot active"></span>
+      <div><div class="sc-name">${esc(s.label)}</div></div>
+      <span class="sc-badge active">Active</span>
+    </div>`).join("") : `<div class="empty">No sources are actively monitoring yet — this fills in automatically as your workspace's sources come online.</div>`;
+
+  // Internal-only panel — only ever renders anything for the exempt admin
+  // account; every other role gets a clean 403 from this endpoint and the
+  // panel simply stays empty, by design.
+  const panel = $("#sourcesInternalPanel");
+  if (!panel) return;
+  try {
+    const full = await api("/api/admin/sources");
+    panel.style.display = "block";
+    panel.innerHTML = `<h3>Internal: Full Source Status <span class="h-sub">visible only on this account</span></h3>` +
+      full.map(s => `<div class="source-card">
+        <span class="sc-dot ${s.active ? "active" : "inactive"}"></span>
+        <div><div class="sc-name">${esc(s.label)}</div>${s.note ? `<div class="sc-note">${esc(s.note)}</div>` : ""}</div>
+        <span class="sc-badge ${s.active ? "active" : "inactive"}">${s.active ? "Active" : "Not active"}</span>
+      </div>`).join("");
+  } catch (e) { panel.style.display = "none"; }
 }
 
 /* =================== PROFILE =================== */
@@ -1407,7 +1566,55 @@ if ($("#toLogin")) $("#toLogin").onclick = e => { e.preventDefault(); showScreen
 if ($("#toSignup")) $("#toSignup").onclick = e => { e.preventDefault(); showScreen("screen-signup"); };
 if ($("#loginToLanding")) $("#loginToLanding").onclick = e => { e.preventDefault(); showScreen("screen-landing"); };
 if ($("#suToLanding")) $("#suToLanding").onclick = e => { e.preventDefault(); showScreen("screen-landing"); };
-document.querySelectorAll(".plan-select").forEach(b => b.onclick = () => showScreen("screen-signup"));
+document.querySelectorAll(".plan-select").forEach(b => b.onclick = () => {
+  showScreen("screen-signup");
+  const r = document.querySelector(`input[name="suPlan"][value="${b.dataset.plan}"]`); if (r) r.checked = true;
+});
+
+let lpCycle = "annual";
+function updateLandingPrices() {
+  document.querySelectorAll("[data-lp-amt]").forEach(node => {
+    const p = node.dataset.lpAmt, annual = PLAN_ANNUAL[p], sub = document.querySelector(`[data-lp-sub="${p}"]`);
+    if (lpCycle === "annual") {
+      node.innerHTML = `$${annual.toLocaleString()}<span>/yr</span>`;
+      if (sub) sub.textContent = `≈ $${(annual/12*1.15).toFixed(2)}/mo billed annually`;
+    } else if (lpCycle === "monthly") {
+      node.innerHTML = `$${(annual/12*1.15).toFixed(2)}<span>/mo</span>`;
+      if (sub) sub.textContent = "billed monthly";
+    } else {
+      node.innerHTML = `$${(annual/365*1.20).toFixed(2)}<span>/day</span>`;
+      if (sub) sub.textContent = "billed daily";
+    }
+  });
+}
+if ($("#lpCycleToggle")) $("#lpCycleToggle").addEventListener("click", e => {
+  const target = e.target.closest("[data-cycle]");
+  const pos = { annual: 0, monthly: 1, daily: 2 };
+  const setCycle = c => {
+    lpCycle = c;
+    document.querySelectorAll("#lpCycleToggle [data-cycle]").forEach(s => { s.classList.toggle("active", s.dataset.cycle === c); s.style.color = s.dataset.cycle === c ? "var(--navy)" : "var(--slate)"; });
+    $("#lpSwitchTrack").dataset.pos = pos[c];
+    updateLandingPrices();
+  };
+  if (target) { setCycle(target.dataset.cycle); return; }
+  if (e.target.closest("#lpSwitchTrack")) { const order = ["annual","monthly","daily"]; setCycle(order[(order.indexOf(lpCycle)+1)%3]); }
+});
+
+if ($("#showEnterpriseFormBtn")) $("#showEnterpriseFormBtn").onclick = () => {
+  $("#enterpriseFormWrap").style.display = "block";
+  $("#showEnterpriseFormBtn").style.display = "none";
+};
+if ($("#entSubmitBtn")) $("#entSubmitBtn").onclick = async () => {
+  const name = $("#entName").value.trim(), email = $("#entEmail").value.trim(),
+        company = $("#entCompany").value.trim(), message = $("#entMessage").value.trim();
+  const err = $("#entErr"); err.style.display = "none";
+  if (!name || !email || !company) { err.textContent = "Please fill in your name, email, and company."; err.style.display = "block"; return; }
+  try {
+    await api("/api/enterprise-inquiry", { method: "POST", body: { name, email, company, message } });
+    $("#enterpriseFormWrap").innerHTML = `<p style="font-size:13px;color:var(--slate);text-align:center;padding:10px 0">Thanks — we'll be in touch shortly.</p>`;
+  } catch (e) { err.textContent = "Something went wrong — please try again."; err.style.display = "block"; }
+};
+
 
 /* =================== LANDING PAGE DECORATION — purely cosmetic. Wrapped so
    that a missing browser API, a blocked font, or any other failure here can

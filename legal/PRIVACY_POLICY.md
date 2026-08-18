@@ -117,7 +117,7 @@ reasonable notice before they take effect.
 
 ## 12. Contact
 
-[YOUR LEGAL ENTITY NAME]
+BrandsLens Limited
 Data Protection contact: [PRIVACY EMAIL]
 [Registered address]
 

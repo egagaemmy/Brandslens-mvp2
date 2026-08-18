@@ -15,12 +15,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import select
 
 from .db import SessionLocal, init_db
-from .config import (CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_REDDIT, CADENCE_YOUTUBE,
+from .config import (CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE,
                      CADENCE_DOMAINS, CADENCE_TELEGRAM_FLUSH, CADENCE_X, CADENCE_SLA_SWEEP, TIMEZONE)
 from .models import Workspace
 from .services import pipeline, media_room
 from .services.mailer import slack_alert
-from .collectors import (news_collector, nairaland_collector, reddit_collector,
+from .collectors import (news_collector, nairaland_collector, hackernews_collector, reddit_collector,
                          youtube_collector, domain_collector, telegram_collector, x_collector)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -69,39 +69,6 @@ def sweep_sla() -> None:
         db.close()
 
 
-def check_trials() -> None:
-    """Runs regularly: sends a one-time reminder ~24h before a trial ends,
-    and flips any organization whose trial has genuinely expired to
-    'expired' — which app/deps.py's active_member dependency then enforces
-    on every data request, locking the product until they subscribe."""
-    from datetime import timedelta
-    from .models import Organization, OrgMember, aware, now_utc
-    from .services.mailer import send_trial_reminder, send_trial_expired
-    db = SessionLocal()
-    try:
-        trialing = db.scalars(select(Organization).where(Organization.billing_status == "trialing")).all()
-        now = now_utc()
-        for org in trialing:
-            if not org.trial_ends_at:
-                continue
-            ends = aware(org.trial_ends_at)
-            owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org.id, OrgMember.role == "owner"))
-            if not owner:
-                continue
-            if ends < now:
-                org.billing_status = "expired"
-                db.commit()
-                send_trial_expired(owner.email, owner.name, org.name)
-                log.info("Trial expired for org=%s (%s)", org.id, org.name)
-            elif ends - now <= timedelta(hours=24) and not org.trial_reminder_sent:
-                org.trial_reminder_sent = True
-                db.commit()
-                send_trial_reminder(owner.email, owner.name, org.name, (ends - now).total_seconds() / 3600)
-                log.info("Sent trial-ending reminder for org=%s (%s)", org.id, org.name)
-    finally:
-        db.close()
-
-
 def start_background_loops() -> None:
     db = SessionLocal()
     channel_map = {ws.id: (ws.telegram_channels or []) for ws in db.scalars(select(Workspace)).all()}
@@ -120,17 +87,17 @@ def main() -> None:
     sched = BackgroundScheduler(timezone=TIMEZONE)
     sched.add_job(run_collector, "interval", minutes=CADENCE_NEWS, args=("news", news_collector.collect), id="news")
     sched.add_job(run_collector, "interval", minutes=CADENCE_NAIRALAND, args=("nairaland", nairaland_collector.collect), id="nairaland")
+    sched.add_job(run_collector, "interval", minutes=CADENCE_HACKERNEWS, args=("hackernews", hackernews_collector.collect), id="hackernews")
     sched.add_job(run_collector, "interval", minutes=CADENCE_REDDIT, args=("reddit", reddit_collector.collect), id="reddit")
     sched.add_job(run_collector, "interval", minutes=CADENCE_YOUTUBE, args=("youtube", youtube_collector.collect), id="youtube")
     sched.add_job(run_collector, "interval", minutes=CADENCE_DOMAINS, args=("domains", domain_collector.collect), id="domains")
     sched.add_job(run_collector, "interval", minutes=CADENCE_X, args=("x", x_collector.collect), id="x")  # no-ops if X_ENABLED=false
     sched.add_job(flush_telegram, "interval", minutes=CADENCE_TELEGRAM_FLUSH, id="tg-flush")
     sched.add_job(sweep_sla, "interval", minutes=CADENCE_SLA_SWEEP, id="sla-sweep")
-    sched.add_job(check_trials, "interval", minutes=60, id="trial-check")
     sched.start()
     start_background_loops()
-    log.info("MVP worker started — news %sm, nairaland %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm",
-             CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_REDDIT, CADENCE_YOUTUBE, CADENCE_DOMAINS, CADENCE_SLA_SWEEP)
+    log.info("MVP worker started — news %sm, nairaland %sm, hackernews %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm",
+             CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE, CADENCE_DOMAINS, CADENCE_SLA_SWEEP)
     try:
         while True:
             time.sleep(60)
