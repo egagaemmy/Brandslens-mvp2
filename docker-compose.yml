@@ -1,0 +1,18 @@
+# Minimal MVP stack. SQLite file is bind-mounted so data survives restarts —
+# no Postgres container needed until you actually outgrow it.
+services:
+  api:
+    build: .
+    env_file: .env
+    volumes: ["./data:/srv/data"]
+    environment:
+      DATABASE_URL: sqlite:////srv/data/brandseye_mvp.db
+    ports: ["8000:8000"]
+
+  worker:
+    build: .
+    command: python -m app.worker
+    env_file: .env
+    volumes: ["./data:/srv/data"]
+    environment:
+      DATABASE_URL: sqlite:////srv/data/brandseye_mvp.db
