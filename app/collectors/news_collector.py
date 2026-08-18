@@ -2,6 +2,7 @@
 no API key, works the moment this file runs."""
 from __future__ import annotations
 import logging
+import time
 from datetime import datetime, timezone
 import httpx
 import feedparser
@@ -14,12 +15,26 @@ GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 def collect(db, ws: Workspace) -> list[dict]:
     return _gdelt(ws) + _rss(ws)
 
-def _gdelt(ws: Workspace) -> list[dict]:
+def _gdelt(ws: Workspace, _attempt: int = 1) -> list[dict]:
     terms = search_terms(ws)
     query = "(" + " OR ".join(f'"{t}"' for t in terms) + ")"
     try:
         r = httpx.get(GDELT_URL, params={"query": query, "mode": "artlist",
                                          "format": "json", "maxrecords": 30, "timespan": "1d"}, timeout=30)
+        if r.status_code == 429:
+            # GDELT is free and keyless, which means it's also more
+            # aggressively rate-limited than a paid/keyed API. This happened
+            # for real in production once there were multiple workspaces
+            # running back-to-back — wait it out once, then give up cleanly
+            # rather than raising, since the next scheduled run will pick
+            # this workspace up again regardless.
+            if _attempt < 3:
+                wait = 5 * _attempt
+                log.warning("GDELT rate-limited for %s — waiting %ss (attempt %s/3)", ws.name, wait, _attempt)
+                time.sleep(wait)
+                return _gdelt(ws, _attempt + 1)
+            log.warning("GDELT still rate-limited for %s after 3 attempts — skipping this run", ws.name)
+            return []
         r.raise_for_status()
         arts = r.json().get("articles", [])
     except Exception:  # noqa: BLE001

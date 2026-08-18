@@ -32,9 +32,16 @@ def _each_workspace(db):
 
 
 def run_collector(name: str, collect_fn) -> None:
+    """Runs collect_fn once per workspace. The short pause between workspaces
+    is deliberate: GDELT, Reddit, and YouTube are all external APIs with
+    their own rate limits, and with more than a couple of workspaces,
+    calling them back-to-back with zero spacing trips those limits — this
+    happened for real in production (GDELT returning 429 Too Many Requests
+    within seconds of the previous workspace's request)."""
     db = SessionLocal()
     try:
-        for ws in _each_workspace(db):
+        workspaces = _each_workspace(db)
+        for i, ws in enumerate(workspaces):
             try:
                 candidates = collect_fn(db, ws)
                 if candidates:
@@ -42,6 +49,8 @@ def run_collector(name: str, collect_fn) -> None:
                     log.info("%s / %s: %s", name, ws.name, summary)
             except Exception:  # noqa: BLE001
                 log.exception("%s failed for %s", name, ws.name)
+            if i < len(workspaces) - 1:
+                time.sleep(3)
     finally:
         db.close()
 
