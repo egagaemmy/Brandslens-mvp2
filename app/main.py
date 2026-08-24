@@ -384,7 +384,9 @@ def _run_historical_scan(ws_id: str, days_back: int) -> None:
     try:
         ws = db.get(Workspace, ws_id)
         if not ws:
+            log.warning("Historical scan requested for unknown workspace %s", ws_id)
             return
+        log.info("Historical scan starting for %s — %s days back", ws.name, days_back)
         for mod in COLLECTORS:
             source = mod.__name__.split(".")[-1]
             run = ScanRun(workspace_id=ws.id, source=f"{source}_historical_{days_back}d")
@@ -395,9 +397,12 @@ def _run_historical_scan(ws_id: str, days_back: int) -> None:
                 summary = pipeline.ingest_candidates(db, ws, candidates, source=source)
                 run.finished_at = now_utc()
                 run.candidates, run.new_incidents, run.high_count = summary["candidates"], summary["new"], summary["high"]
+                log.info("historical/%s / %s (%sd back): %s", source, ws.name, days_back, summary)
             except Exception as e:  # noqa: BLE001
                 run.error = str(e)[:2000]; run.finished_at = now_utc()
+                log.exception("Historical scan failed for %s / %s (%sd back)", source, ws.name, days_back)
             db.commit()
+        log.info("Historical scan finished for %s", ws.name)
     finally:
         db.close()
 
