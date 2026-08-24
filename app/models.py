@@ -186,6 +186,7 @@ class Incident(Base):
     platform: Mapped[str] = mapped_column(String(60), default="News")
     lang: Mapped[str] = mapped_column(String(8), default="en")
     severity: Mapped[str] = mapped_column(String(10), default="WATCH")   # HIGH / MEDIUM / WATCH
+    severity_overridden: Mapped[bool] = mapped_column(Boolean, default=False)  # True once a human has changed it
     sentiment: Mapped[str] = mapped_column(String(12), default="")
     tags: Mapped[list] = mapped_column(JSON, default=list)              # FRAUD, DOMAIN RISK, DISCLOSURE RISK, STRATEGIC
     rationale: Mapped[str] = mapped_column(Text, default="")

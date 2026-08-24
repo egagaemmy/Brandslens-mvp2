@@ -30,7 +30,7 @@ def _get_token() -> str | None:
         log.exception("Reddit auth failed")
         return None
 
-def collect(db, ws: Workspace) -> list[dict]:
+def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     token = _get_token()
     if not token:
         log.info("Reddit not configured — skipping (set REDDIT_CLIENT_ID/SECRET)")

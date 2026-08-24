@@ -10,7 +10,7 @@ from ..models import Workspace
 
 log = logging.getLogger("collector.domains")
 
-def collect(db, ws: Workspace) -> list[dict]:
+def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     out: list[dict] = []
     for d in (ws.brand_domains or []):
         out += _dnstwist(d)

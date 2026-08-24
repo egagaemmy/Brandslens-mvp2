@@ -11,7 +11,7 @@ small number to keep each scan fast and considerate of a free public API.
 """
 from __future__ import annotations
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import httpx
 from ..models import Workspace
 from ..services.pipeline import search_terms
@@ -21,16 +21,20 @@ HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date"
 MAX_TERMS_PER_RUN = 5
 
 
-def collect(db, ws: Workspace) -> list[dict]:
+def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     out, seen = [], set()
     for term in search_terms(ws, limit=MAX_TERMS_PER_RUN):
-        out.extend(_search_one(term, seen))
+        out.extend(_search_one(term, seen, days_back=days_back))
     return out
 
 
-def _search_one(term: str, seen: set[str]) -> list[dict]:
+def _search_one(term: str, seen: set[str], days_back: int | None = None) -> list[dict]:
+    params = {"query": term, "tags": "story,comment", "hitsPerPage": 20}
+    if days_back:
+        cutoff = int((datetime.now(timezone.utc) - timedelta(days=days_back)).timestamp())
+        params["numericFilters"] = f"created_at_i>{cutoff}"
     try:
-        r = httpx.get(HN_SEARCH_URL, params={"query": term, "tags": "story,comment", "hitsPerPage": 20}, timeout=20)
+        r = httpx.get(HN_SEARCH_URL, params=params, timeout=20)
         r.raise_for_status()
         hits = r.json().get("hits", [])
     except Exception:  # noqa: BLE001

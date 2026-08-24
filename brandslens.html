@@ -263,6 +263,9 @@ tbody tr:hover{background:var(--panel-2)}
 .td-ref{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--slate)}
 .tbl-wrap{max-height:600px;overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}
 select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
+select.sev-sel-high{color:var(--red);border-color:#FCA5A5;background:#FEF2F2;font-weight:700}
+select.sev-sel-medium{color:var(--amber-dark);border-color:#FCD34D;background:#FFFBEB;font-weight:700}
+select.sev-sel-watch{color:var(--green);border-color:#6EE7B7;background:#ECFDF5;font-weight:700}
 .empty{padding:44px;text-align:center;color:var(--faint)}
 
 .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:16px}
@@ -824,6 +827,17 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
           <select id="wsSel"></select>
         </div>
         <button class="btn btn-navy btn-sm" id="runScanBtn">▶ Run Scan Now</button>
+        <div class="workspace-sel" id="histRangeWrap" style="display:none">
+          <select id="histRangeSel">
+            <option value="30">Past 30 days</option>
+            <option value="90">Past 90 days</option>
+            <option value="365" selected>Past year</option>
+            <option value="1825" class="hist-opt-growth">Past 5 years</option>
+            <option value="3650" class="hist-opt-professional">Past 10 years</option>
+            <option value="36500" class="hist-opt-enterprise">As far back as possible</option>
+          </select>
+        </div>
+        <button class="btn btn-outline btn-sm" id="histScanBtn" style="display:none" title="Search further back than the usual continuous scan">🕐 Search Historical</button>
         <button class="btn btn-outline btn-sm" id="newWsBtn">+ New workspace</button>
       </div>
     </div>
@@ -878,18 +892,25 @@ select.status-sel{padding:6px 9px;font-size:12px;border-radius:7px}
 
     <!-- REPORTS -->
     <section data-tab="reports">
-      <div class="grid g2">
-        <div class="report-action-card">
+      <div class="grid g3">
+        <div class="report-action-card" id="pdfReportCard">
           <div style="display:flex;align-items:center;gap:16px">
             <div class="ri" style="background:#FEF2F2;color:var(--red)">▤</div>
-            <div><h4 style="font-family:var(--serif);font-size:17px">Branded PDF Report</h4><p style="font-size:12.5px;color:var(--slate)">Summary, severity breakdown, and top incidents — styled to BrandsLens, ready for a board meeting.</p></div>
+            <div><h4 style="font-family:var(--serif);font-size:17px">Branded PDF Report</h4><p style="font-size:12.5px;color:var(--slate)">Executive summary, charts, and top incidents with clickable links — styled to BrandsLens.</p></div>
           </div>
           <button class="btn btn-navy btn-sm" id="btnDownloadPdf">Download PDF</button>
+        </div>
+        <div class="report-action-card" id="pptxReportCard">
+          <div style="display:flex;align-items:center;gap:16px">
+            <div class="ri" style="background:#FFFBEB;color:var(--amber-dark)">◆</div>
+            <div><h4 style="font-family:var(--serif);font-size:17px">PowerPoint Deck</h4><p style="font-size:12.5px;color:var(--slate)">A presentation-ready deck with real, editable charts — perfect for sharing with leadership.</p></div>
+          </div>
+          <button class="btn btn-navy btn-sm" id="btnDownloadPptx">Download PPTX</button>
         </div>
         <div class="report-action-card">
           <div style="display:flex;align-items:center;gap:16px">
             <div class="ri" style="background:#ECFDF5;color:var(--green)">▦</div>
-            <div><h4 style="font-family:var(--serif);font-size:17px">Excel Export</h4><p style="font-size:12.5px;color:var(--slate)">Every incident, color-coded by severity, ready for further analysis.</p></div>
+            <div><h4 style="font-family:var(--serif);font-size:17px">Excel Export</h4><p style="font-size:12.5px;color:var(--slate)">Every incident, color-coded by severity, with clickable links — ready for further analysis.</p></div>
           </div>
           <button class="btn btn-navy btn-sm" id="btnDownloadExcel">Download Excel</button>
         </div>
@@ -1225,10 +1246,32 @@ function renderWorkspaceSelector() {
   $("#wsSel").innerHTML = WORKSPACES.map(w => `<option value="${w.id}" ${w.id===ACTIVE_WS?"selected":""}>${esc(w.name)}</option>`).join("");
 }
 $("#wsSel").addEventListener("change", async e => { ACTIVE_WS = e.target.value; await switchTab(currentTab); });
+async function refreshOrgAndChrome() {
+  try {
+    const me = await api("/api/me");
+    SESSION.organization = me.organization;
+    applyPlanChrome();
+    applyReportFormatGating();
+  } catch (e) { /* non-fatal — chrome just won't refresh until next natural reload */ }
+}
 function applyPlanChrome() {
   if (!SESSION.organization) return;
   $("#sidePlanName").textContent = PLAN_LABEL[SESSION.organization.plan] + " plan";
   $("#sidePlanUsage").textContent = SESSION.organization.billing_status === "trialing" ? "Free trial" : SESSION.organization.billing_status;
+
+  const plan = SESSION.organization.effective_plan || SESSION.organization.plan;
+  const hasHistorical = plan !== "standard";
+  $("#histRangeWrap").style.display = hasHistorical ? "flex" : "none";
+  $("#histScanBtn").style.display = hasHistorical ? "inline-flex" : "none";
+  if (hasHistorical) {
+    const tierRank = { growth: 1, professional: 2, enterprise: 3 };
+    const rank = tierRank[plan] || 0;
+    document.querySelectorAll("#histRangeSel option").forEach(opt => {
+      if (opt.classList.contains("hist-opt-growth")) opt.style.display = rank >= 1 ? "block" : "none";
+      if (opt.classList.contains("hist-opt-professional")) opt.style.display = rank >= 2 ? "block" : "none";
+      if (opt.classList.contains("hist-opt-enterprise")) opt.style.display = rank >= 3 ? "block" : "none";
+    });
+  }
 }
 $("#runScanBtn").onclick = async () => {
   if (!ACTIVE_WS) { toast("No workspace selected", "Create or select a workspace first", "warn"); return; }
@@ -1251,6 +1294,31 @@ $("#runScanBtn").onclick = async () => {
     btn.disabled = false; btn.textContent = "▶ Run Scan Now";
     banner.style.display = "none";
     toast("Scan failed to start", e.message, "bad");
+  }
+};
+$("#histScanBtn").onclick = async () => {
+  if (!ACTIVE_WS) { toast("No workspace selected", "Create or select a workspace first", "warn"); return; }
+  const days = $("#histRangeSel").value;
+  const label = { "7": "the past 7 days", "30": "the past 30 days", "90": "the past 90 days", "365": "the past year" }[days];
+  const btn = $("#histScanBtn"), banner = $("#scanStatusBanner");
+  btn.disabled = true; btn.textContent = "⏳ Searching…";
+  banner.style.display = "block";
+  banner.innerHTML = `<div class="card" style="background:#EFF6FF;border-color:#BFDBFE">
+    <b style="color:var(--navy)">Historical search started — ${label}</b>
+    <p style="font-size:12.5px;color:var(--slate);margin-top:4px">News, YouTube, and Hacker News genuinely search back this far. Nairaland and Domain Watch don't support a historical window, so they run their normal check alongside this. A wide search can take a little longer than a regular scan — results will appear below automatically.</p>
+  </div>`;
+  try {
+    await api(`/api/scan/${ACTIVE_WS}/historical`, { method: "POST", body: { days_back: parseInt(days, 10) } });
+    setTimeout(async () => {
+      btn.disabled = false; btn.textContent = "🕐 Search Historical";
+      banner.style.display = "none";
+      await switchTab(currentTab);
+      toast("Historical search complete", `Checked ${label} across supported sources`, "good");
+    }, 18000);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "🕐 Search Historical";
+    banner.style.display = "none";
+    toast("Historical search failed to start", e.message, "bad");
   }
 };
 $("#newWsBtn").onclick = async () => {
@@ -1415,7 +1483,11 @@ async function renderLog() {
   $("#logEmpty").style.display = rows.length ? "none" : "block";
   $("#logBody").innerHTML = rows.map(i => `<tr data-inc="${i.id}">
     <td class="td-ref">${i.ref}</td>
-    <td><span class="pill p-${i.sev.toLowerCase()==='high'?'high':i.sev.toLowerCase()==='medium'?'med':'watch'}">${i.sev}</span></td>
+    <td><select class="status-sel sev-sel-${i.sev.toLowerCase()}" data-inc-sev="${i.id}">
+      <option value="HIGH" ${i.sev==='HIGH'?'selected':''}>HIGH</option>
+      <option value="MEDIUM" ${i.sev==='MEDIUM'?'selected':''}>MEDIUM</option>
+      <option value="WATCH" ${i.sev==='WATCH'?'selected':''}>WATCH</option>
+    </select>${i.sev_overridden ? '<div style="font-size:9.5px;color:var(--faint);margin-top:2px">manually set</div>' : ''}</td>
     <td style="max-width:380px">${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener" class="mention-link">${esc(i.title)}</a>` : esc(i.title)}</td>
     <td>${i.platform}</td>
     <td>${i.url ? `<button class="copy-link-btn" data-copy-url="${esc(i.url)}" title="Copy link">⧉</button>` : `<span style="color:var(--faint);font-size:11px">—</span>`}</td>
@@ -1426,6 +1498,12 @@ async function renderLog() {
   $("#logBody").querySelectorAll("[data-inc-status]").forEach(sel => sel.onchange = async () => {
     try { await api(`/api/incidents/${sel.dataset.incStatus}/status`, { method: "PATCH", body: { status: sel.value } });
       toast("Status updated", "Incident marked " + sel.value); } catch (e) { toast("Update failed", e.message, "warn"); }
+  });
+  $("#logBody").querySelectorAll("[data-inc-sev]").forEach(sel => sel.onchange = async () => {
+    try { await api(`/api/incidents/${sel.dataset.incSev}/severity`, { method: "PATCH", body: { severity: sel.value } });
+      toast("Severity updated", `Marked ${sel.value} — your call always overrides the AI's`, "good");
+      await renderLog();
+    } catch (e) { toast("Couldn't update severity", e.message, "warn"); }
   });
 }
 ["fSev","fStatus"].forEach(id => $("#"+id).addEventListener("change", renderLog));
@@ -1499,6 +1577,7 @@ $("#overlay").onclick = closeDrawer;
 
 /* =================== REPORTS =================== */
 async function renderReports() {
+  applyReportFormatGating();
   if (!ACTIVE_WS) return;
   let analytics; try { analytics = await api(`/api/analytics/${ACTIVE_WS}?_=1${buildDateQuery()}`); } catch (e) { return; }
   destroyChart(chartReportSeverity);
@@ -1513,7 +1592,27 @@ async function renderReports() {
     options: { plugins:{legend:{display:false}}, maintainAspectRatio: false } });
 }
 $("#btnDownloadPdf").onclick = () => { if (!ACTIVE_WS) return; toast("Generating…", "Your branded PDF report is on its way"); downloadFile(`/api/reports/pdf?ws_id=${ACTIVE_WS}${buildDateQuery()}`, "brandslens-report.pdf"); };
+$("#btnDownloadPptx").onclick = () => { if (!ACTIVE_WS) return; toast("Generating…", "Your PowerPoint deck is on its way — real charts take a moment to build"); downloadFile(`/api/reports/pptx?ws_id=${ACTIVE_WS}${buildDateQuery()}`, "brandslens-report.pptx"); };
 $("#btnDownloadExcel").onclick = () => { if (!ACTIVE_WS) return; toast("Generating…", "Your Excel export is on its way"); downloadFile(`/api/reports/excel?ws_id=${ACTIVE_WS}${buildDateQuery()}`, "brandslens-export.xlsx"); };
+
+function applyReportFormatGating() {
+  if (!SESSION.organization) return;
+  const plan = SESSION.organization.effective_plan || SESSION.organization.plan;
+  const formats = { standard: ["excel"], growth: ["excel", "pdf"], professional: ["excel", "pdf", "pptx"], enterprise: ["excel", "pdf", "pptx"] }[plan] || ["excel"];
+  const lock = (cardId, btnId, fmt, upgradeText) => {
+    const card = $(cardId), btn = $(btnId);
+    if (formats.includes(fmt)) {
+      card.style.opacity = "1"; btn.disabled = false; btn.textContent = btn.dataset.origLabel || btn.textContent;
+    } else {
+      card.style.opacity = ".55";
+      if (!btn.dataset.origLabel) btn.dataset.origLabel = btn.textContent;
+      btn.textContent = "🔒 " + upgradeText;
+      btn.disabled = true;
+    }
+  };
+  lock("#pdfReportCard", "#btnDownloadPdf", "pdf", "Requires Growth+");
+  lock("#pptxReportCard", "#btnDownloadPptx", "pptx", "Requires Professional+");
+}
 
 /* =================== TEAM =================== */
 async function renderTeam() {
@@ -1701,11 +1800,11 @@ function renderViewAsPanel(status) {
     </div>
   </div>`;
   panel.querySelectorAll("[data-view-as]").forEach(b => b.onclick = async () => {
-    try { await api("/api/admin/view-as", { method: "POST", body: { plan: b.dataset.viewAs } }); toast("View As updated", `Now simulating ${b.textContent}`, "good"); await renderBilling(); }
+    try { await api("/api/admin/view-as", { method: "POST", body: { plan: b.dataset.viewAs } }); toast("View As updated", `Now simulating ${b.textContent}`, "good"); await refreshOrgAndChrome(); await renderBilling(); }
     catch (e) { toast("Couldn't switch view", e.message, "warn"); }
   });
   panel.querySelector("[data-view-as-reset]").onclick = async () => {
-    try { await api("/api/admin/view-as", { method: "POST", body: { plan: null } }); toast("Reset", "Back to your real unlimited view", "good"); await renderBilling(); }
+    try { await api("/api/admin/view-as", { method: "POST", body: { plan: null } }); toast("Reset", "Back to your real unlimited view", "good"); await refreshOrgAndChrome(); await renderBilling(); }
     catch (e) { toast("Couldn't reset", e.message, "warn"); }
   };
 }

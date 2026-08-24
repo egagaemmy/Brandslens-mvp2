@@ -12,15 +12,16 @@ from ..services.pipeline import search_terms
 log = logging.getLogger("collector.news")
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
-def collect(db, ws: Workspace) -> list[dict]:
-    return _gdelt(ws) + _rss(ws)
+def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
+    return _gdelt(ws, days_back=days_back) + _rss(ws)
 
-def _gdelt(ws: Workspace, _attempt: int = 1) -> list[dict]:
+def _gdelt(ws: Workspace, _attempt: int = 1, days_back: int | None = None) -> list[dict]:
     terms = search_terms(ws)
     query = "(" + " OR ".join(f'"{t}"' for t in terms) + ")"
+    timespan = f"{days_back}d" if days_back else "1d"
     try:
         r = httpx.get(GDELT_URL, params={"query": query, "mode": "artlist",
-                                         "format": "json", "maxrecords": 30, "timespan": "1d"}, timeout=30)
+                                         "format": "json", "maxrecords": 30, "timespan": timespan}, timeout=30)
         if r.status_code == 429:
             # GDELT is free and keyless, which means it's also more
             # aggressively rate-limited than a paid/keyed API. This happened
@@ -32,7 +33,7 @@ def _gdelt(ws: Workspace, _attempt: int = 1) -> list[dict]:
                 wait = 5 * _attempt
                 log.warning("GDELT rate-limited for %s — waiting %ss (attempt %s/3)", ws.name, wait, _attempt)
                 time.sleep(wait)
-                return _gdelt(ws, _attempt + 1)
+                return _gdelt(ws, _attempt + 1, days_back=days_back)
             log.warning("GDELT still rate-limited for %s after 3 attempts — skipping this run", ws.name)
             return []
         r.raise_for_status()

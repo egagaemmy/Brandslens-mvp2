@@ -11,7 +11,7 @@ from ..models import Workspace
 log = logging.getLogger("collector.x")
 SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
 
-def collect(db, ws: Workspace) -> list[dict]:
+def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     if not X_ENABLED:
         return []  # deliberately silent — this is an expected, budgeted-for gap at MVP stage
     if not X_BEARER_TOKEN:

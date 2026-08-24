@@ -8,7 +8,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timedelta, timezone
 from passlib.hash import argon2
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from ..models import Organization, OrgMember, OrgInvite, SessionToken, PasswordResetToken, Workspace, now_utc, aware
@@ -18,6 +18,14 @@ RESET_TTL_HOURS = 2
 SESSION_TTL_DAYS = 30
 PLAN_WORKSPACE_LIMIT = {"standard": 1, "growth": 5, "professional": 10, "enterprise": 999}
 PLAN_KEYWORD_LIMIT = {"standard": 25, "growth": 999, "professional": 999, "enterprise": 999}
+PLAN_MEMBER_LIMIT = {"standard": 3, "growth": 10, "professional": 25, "enterprise": 999}
+# Historical search reach, in days. 0 means the feature isn't available at
+# all on that tier — Standard doesn't get it.
+PLAN_HISTORICAL_DAYS = {"standard": 0, "growth": 365 * 5, "professional": 365 * 10, "enterprise": 365 * 100}
+# Report format access, cumulative by tier — Excel is available to everyone,
+# PDF from Growth up, PPTX from Professional up.
+PLAN_REPORT_FORMATS = {"standard": {"excel"}, "growth": {"excel", "pdf"},
+                       "professional": {"excel", "pdf", "pptx"}, "enterprise": {"excel", "pdf", "pptx"}}
 SELF_SERVE_PLANS = ("standard", "growth", "professional")  # Enterprise is quote-only, never self-serve
 
 
@@ -128,6 +136,12 @@ def invite_member(db: Session, inviter: OrgMember, email: str, name: str, role: 
         raise AuthError("Team Leads can only invite Team Members. Ask the account Owner to add another Lead.")
     if db.scalar(select(OrgMember).where(OrgMember.email == email.lower())):
         raise AuthError("That email is already on a BrandsLens account.")
+
+    org = db.get(Organization, inviter.organization_id)
+    limit = PLAN_MEMBER_LIMIT[effective_plan(org)]
+    existing_count = db.scalar(select(func.count(OrgMember.id)).where(OrgMember.organization_id == org.id))
+    if existing_count >= limit:
+        raise AuthError(f"Your plan allows up to {limit} team members. Upgrade to add more.")
 
     member = OrgMember(organization_id=inviter.organization_id, email=email.lower(), name=name,
                        role=role, status="invited", invited_by=inviter.id)

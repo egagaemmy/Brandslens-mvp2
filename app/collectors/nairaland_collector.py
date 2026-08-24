@@ -24,7 +24,7 @@ HEADERS = {
 LINK_RE = re.compile(r'<a href="(https://www\.nairaland\.com/\d+/[^"]+)"[^>]*>(.*?)</a>', re.I)
 TAG_RE = re.compile(r"<[^>]+>")
 
-def collect(db, ws: Workspace) -> list[dict]:
+def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     # Nairaland's search has no boolean OR support (it's a plain URL path per
     # term), so — unlike GDELT/Reddit — we make one request per term rather
     # than combining them. Capped at 3 terms per run to stay genuinely

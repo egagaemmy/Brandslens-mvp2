@@ -287,9 +287,9 @@ def update_workspace(body: WorkspaceUpdateBody, ws: Workspace = Depends(owned_wo
 # ---------- incidents ----------
 def _inc_dict(i: Incident) -> dict:
     return {"id": i.id, "ref": i.ref, "title": i.title, "url": i.url, "author": i.author,
-            "platform": i.platform, "lang": i.lang, "sev": i.severity, "sentiment": i.sentiment,
-            "tags": i.tags, "rationale": i.rationale, "status": i.status, "reach": i.reach,
-            "posted": i.posted_at.isoformat() if i.posted_at else None, "source": i.source}
+            "platform": i.platform, "lang": i.lang, "sev": i.severity, "sev_overridden": i.severity_overridden,
+            "sentiment": i.sentiment, "tags": i.tags, "rationale": i.rationale, "status": i.status,
+            "reach": i.reach, "posted": i.posted_at.isoformat() if i.posted_at else None, "source": i.source}
 
 
 class StatusBody(BaseModel):
@@ -309,6 +309,30 @@ def set_status(incident_id: str, body: StatusBody, member: OrgMember = Depends(a
     inc.status = body.status
     db.commit()
     return {"ok": True}
+
+
+class SeverityBody(BaseModel):
+    severity: str
+
+
+@app.patch("/api/incidents/{incident_id}/severity")
+def set_severity(incident_id: str, body: SeverityBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """The AI's classification is a starting point, not the final word — the
+    team knows their own brand and context better than any automated system
+    ever will, so severity is always editable, and we track that it was a
+    human decision rather than silently overwriting the AI's original call."""
+    if body.severity not in ("HIGH", "MEDIUM", "WATCH"):
+        raise HTTPException(422, "Severity must be HIGH, MEDIUM, or WATCH.")
+    inc = db.get(Incident, incident_id)
+    if not inc:
+        raise HTTPException(404, "Not found")
+    ws = db.get(Workspace, inc.workspace_id)
+    if not ws or ws.organization_id != member.organization_id:
+        raise HTTPException(404, "Not found")
+    inc.severity = body.severity
+    inc.severity_overridden = True
+    db.commit()
+    return {"ok": True, "severity": inc.severity}
 
 
 # ---------- scans ----------
@@ -339,6 +363,71 @@ def _run_full_scan(ws_id: str) -> None:
 def trigger_scan(tasks: BackgroundTasks, ws: Workspace = Depends(owned_workspace)) -> dict:
     tasks.add_task(_run_full_scan, ws.id)
     return {"ok": True, "message": "Scan started across all configured sources"}
+
+
+# Which sources genuinely honour a historical date range vs which ones
+# always search "now" regardless — honest, not aspirational. Domain Watch
+# checks currently-resolving permutations (no publish date to search
+# against); Nairaland's search endpoint doesn't expose a reliable date
+# filter we could confidently drive; X isn't enabled at all yet.
+HISTORICAL_CAPABLE = {"news_collector", "youtube_collector", "hackernews_collector", "reddit_collector"}
+
+
+def _run_historical_scan(ws_id: str, days_back: int) -> None:
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        ws = db.get(Workspace, ws_id)
+        if not ws:
+            return
+        for mod in COLLECTORS:
+            source = mod.__name__.split(".")[-1]
+            run = ScanRun(workspace_id=ws.id, source=f"{source}_historical_{days_back}d")
+            db.add(run); db.commit()
+            try:
+                kwargs = {"days_back": days_back} if source in HISTORICAL_CAPABLE else {}
+                candidates = mod.collect(db, ws, **kwargs)
+                summary = pipeline.ingest_candidates(db, ws, candidates, source=source)
+                run.finished_at = now_utc()
+                run.candidates, run.new_incidents, run.high_count = summary["candidates"], summary["new"], summary["high"]
+            except Exception as e:  # noqa: BLE001
+                run.error = str(e)[:2000]; run.finished_at = now_utc()
+            db.commit()
+    finally:
+        db.close()
+
+
+class HistoricalScanBody(BaseModel):
+    days_back: int
+
+
+@app.post("/api/scan/{ws_id}/historical")
+def trigger_historical_scan(body: HistoricalScanBody, tasks: BackgroundTasks,
+                            ws: Workspace = Depends(owned_workspace), member: OrgMember = Depends(active_member),
+                            db: Session = Depends(get_db)) -> dict:
+    """On-demand only — deliberately not part of the continuous 20-minute
+    cycle. A wide historical search is heavier (more results per source,
+    slower external APIs), so it's something the team explicitly asks for,
+    not something that runs automatically and repeatedly.
+
+    Tiered: Standard doesn't get this feature at all — Growth reaches back
+    5 years, Professional 10 years, Enterprise effectively unlimited."""
+    from .services.auth import effective_plan, PLAN_HISTORICAL_DAYS
+    org = db.get(Organization, member.organization_id)
+    plan = effective_plan(org)
+    max_days = PLAN_HISTORICAL_DAYS[plan]
+    if max_days <= 0:
+        raise HTTPException(403, "Historical search isn't available on the Standard plan — upgrade to Growth or higher to use it.")
+    if body.days_back <= 0:
+        raise HTTPException(422, "days_back must be a positive number.")
+    if body.days_back > max_days:
+        raise HTTPException(422, f"Your plan allows historical search up to {max_days // 365} years back. "
+                            f"Upgrade for a wider range.")
+    tasks.add_task(_run_historical_scan, ws.id, body.days_back)
+    supported = [m.__name__.split(".")[-1].replace("_collector", "") for m in COLLECTORS
+                if m.__name__.split(".")[-1] in HISTORICAL_CAPABLE]
+    return {"ok": True, "message": f"Historical search started, going back {body.days_back} days.",
+           "sources_with_real_date_range": supported}
 
 
 # ==================================================================
@@ -657,9 +746,21 @@ def get_branding() -> dict:
 from .services import report_generator  # noqa: E402
 
 
+def _require_report_format(member: OrgMember, db: Session, fmt: str) -> None:
+    from .services.auth import effective_plan, PLAN_REPORT_FORMATS
+    org = db.get(Organization, member.organization_id)
+    plan = effective_plan(org)
+    if fmt not in PLAN_REPORT_FORMATS[plan]:
+        names = {"pdf": "PDF reports", "pptx": "PowerPoint reports"}
+        raise HTTPException(403, f"{names.get(fmt, fmt.upper())} require the Growth plan or higher "
+                            f"(Professional for PowerPoint) — your current plan doesn't include this format.")
+
+
 @app.get("/api/reports/pdf")
-def report_pdf(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
-               range: str | None = None, start: str | None = None, end: str | None = None) -> Response:
+def report_pdf(ws: Workspace = Depends(owned_workspace), member: OrgMember = Depends(active_member),
+               db: Session = Depends(get_db), range: str | None = None, start: str | None = None,
+               end: str | None = None) -> Response:
+    _require_report_format(member, db, "pdf")
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
     pdf_bytes = report_generator.generate_pdf_report(ws, incidents)
@@ -668,9 +769,24 @@ def report_pdf(ws: Workspace = Depends(owned_workspace), db: Session = Depends(g
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+@app.get("/api/reports/pptx")
+def report_pptx(ws: Workspace = Depends(owned_workspace), member: OrgMember = Depends(active_member),
+                db: Session = Depends(get_db), range: str | None = None, start: str | None = None,
+                end: str | None = None) -> Response:
+    _require_report_format(member, db, "pptx")
+    q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
+    incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
+    pptx_bytes = report_generator.generate_pptx_report(ws, incidents)
+    filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pptx"
+    return Response(content=pptx_bytes,
+                    media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @app.get("/api/reports/excel")
 def report_excel(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
                  range: str | None = None, start: str | None = None, end: str | None = None) -> Response:
+    # Excel is available on every tier, including Standard — no gating here.
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(2000)).all()
     xlsx_bytes = report_generator.generate_excel_export(ws, incidents)
