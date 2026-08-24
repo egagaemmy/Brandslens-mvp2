@@ -7,27 +7,29 @@ API key that can see everything — that was gap #1 from the review, and this
 file is the fix.
 """
 from __future__ import annotations
+import logging
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session
 
 from .db import get_db, init_db
-from .config import FRONTEND_ORIGIN, APP_NAME
+from .config import FRONTEND_ORIGIN, APP_NAME, ADMIN_SETUP_SECRET
 from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
-                     MediaRoomCase, MediaRoomAudit, now_utc, aware)
+                     MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention, now_utc, aware)
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
 from .collectors import news_collector, nairaland_collector, hackernews_collector, reddit_collector, youtube_collector, domain_collector, x_collector
 
 app = FastAPI(title=APP_NAME)
+log = logging.getLogger("main")
 app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_ORIGIN] if FRONTEND_ORIGIN != "*" else ["*"],
                    allow_methods=["*"], allow_headers=["*"], expose_headers=["Content-Disposition"])
 
@@ -273,10 +275,13 @@ def update_workspace(body: WorkspaceUpdateBody, ws: Workspace = Depends(owned_wo
                      member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
     if member.role == "member":
         raise HTTPException(403, "Only an Owner or Team Lead can change workspace settings")
+    from .services.auth import effective_plan, PLAN_KEYWORD_LIMIT
     org = db.get(Organization, member.organization_id)
     updates = body.model_dump(exclude_unset=True)
-    if "keywords" in updates and updates["keywords"] is not None and len(updates["keywords"]) > org.keyword_limit:
-        raise HTTPException(422, f"Your plan allows up to {org.keyword_limit} tracked keywords")
+    if "keywords" in updates and updates["keywords"] is not None:
+        limit = PLAN_KEYWORD_LIMIT[effective_plan(org)]
+        if len(updates["keywords"]) > limit:
+            raise HTTPException(422, f"Your plan allows up to {limit} tracked keywords")
     for field, value in updates.items():
         if value is not None:
             setattr(ws, field, value)
@@ -685,6 +690,85 @@ def chat_enquiry(body: ChatEnquiryBody, request: Request) -> dict:
     return {"reply": answer(body.message, body.history)}
 
 
+class AppChatBody(BaseModel):
+    message: str
+    history: list[dict] = []
+
+
+@app.post("/api/app-chat/{ws_id}")
+def app_chat(ws_id: str, body: AppChatBody, ws: Workspace = Depends(owned_workspace),
+            member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """The in-app 'Ask BrandsLens' copilot — completely separate from the
+    public marketing bot above. Not available on Standard at all; Growth
+    and Professional+ get genuinely different depth of analysis, not just a
+    cosmetic label difference."""
+    from .services.auth import effective_plan, PLAN_APP_CHAT_MODE
+    from .services.chatbot import answer_app_chat
+    from collections import Counter
+    org = db.get(Organization, member.organization_id)
+    mode = PLAN_APP_CHAT_MODE[effective_plan(org)]
+    if not mode:
+        raise HTTPException(403, "Ask BrandsLens requires the Growth plan or higher.")
+
+    incidents = db.scalars(select(Incident).where(Incident.workspace_id == ws.id)
+                          .order_by(Incident.posted_at.desc()).limit(300)).all()
+    sev = Counter(i.severity for i in incidents)
+    platform = Counter(i.platform for i in incidents)
+    stats = (f"Total mentions: {len(incidents)}\nSeverity: {dict(sev)}\n"
+            f"Top platforms: {dict(platform.most_common(5))}\n"
+            f"Recent HIGH severity titles: " +
+            "; ".join(i.title[:120] for i in incidents if i.severity == "HIGH")[:1000])
+    reply = answer_app_chat(body.message, body.history, ws.name, mode, stats)
+    return {"reply": reply, "mode": mode}
+
+
+
+@app.get("/api/setup/sync-schema")
+def setup_sync_schema(secret: str, db: Session = Depends(get_db)) -> dict:
+    """Temporary, one-time-use route — safely brings the live database up to
+    date with the current models, WITHOUT dropping or touching any existing
+    data. Unlike the old reset-database route (which wiped everything and
+    was removed after use), this only ever adds what's genuinely missing:
+    new tables via create_all (which never touches existing tables), and
+    new columns on existing tables via real introspection rather than a
+    hardcoded guess — this is the second time a new column silently didn't
+    reach the live database, and guessing which one is missing each time
+    isn't sustainable. Protected by the same ADMIN_SETUP_SECRET pattern as
+    before. Remove this route and redeploy once you've used it."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    from sqlalchemy import inspect, text
+    from .models import Base
+    from .db import engine
+
+    Base.metadata.create_all(engine)  # safe — only creates tables that don't exist yet
+
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    added = []
+    with engine.begin() as conn:
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in existing_tables:
+                continue  # just created above, or genuinely new — nothing more to do
+            live_columns = {c["name"] for c in inspector.get_columns(table_name)}
+            for col in table.columns:
+                if col.name in live_columns:
+                    continue
+                col_type = col.type.compile(dialect=engine.dialect)
+                default_clause = ""
+                if col.default is not None and getattr(col.default, "is_scalar", False):
+                    val = col.default.arg
+                    if isinstance(val, bool):
+                        default_clause = f" DEFAULT {'TRUE' if val else 'FALSE'}"
+                    elif isinstance(val, (int, float)):
+                        default_clause = f" DEFAULT {val}"
+                conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}{default_clause}'))
+                added.append(f"{table_name}.{col.name}")
+
+    return {"ok": True, "columns_added": added,
+           "message": "Schema synced — no existing data was touched." if added else
+                     "Schema was already up to date — nothing needed adding."}
+
 
 @app.post("/api/enterprise-inquiry")
 def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
@@ -756,6 +840,25 @@ def _require_report_format(member: OrgMember, db: Session, fmt: str) -> None:
                             f"(Professional for PowerPoint) — your current plan doesn't include this format.")
 
 
+def _get_competitor_rows(ws: Workspace, db: Session) -> list[dict] | None:
+    """Shared by all three report formats so the competitive section is
+    identical regardless of which one gets downloaded — same computation
+    as the /competitors/analytics endpoint, just callable directly from
+    report generation without an extra HTTP round-trip."""
+    from collections import Counter
+    comps = db.scalars(select(Competitor).where(Competitor.workspace_id == ws.id)).all()
+    if not comps:
+        return None
+    own_incidents = db.scalars(select(Incident).where(Incident.workspace_id == ws.id)).all()
+    rows = [{"name": ws.name, "is_you": True, "mentions": len(own_incidents),
+            "sentiment": dict(Counter(i.sentiment for i in own_incidents if i.sentiment))}]
+    for comp in comps:
+        mentions = db.scalars(select(CompetitorMention).where(CompetitorMention.competitor_id == comp.id)).all()
+        rows.append({"name": comp.name, "is_you": False, "mentions": len(mentions),
+                    "sentiment": dict(Counter(m.sentiment for m in mentions if m.sentiment))})
+    return rows
+
+
 @app.get("/api/reports/pdf")
 def report_pdf(ws: Workspace = Depends(owned_workspace), member: OrgMember = Depends(active_member),
                db: Session = Depends(get_db), range: str | None = None, start: str | None = None,
@@ -763,7 +866,8 @@ def report_pdf(ws: Workspace = Depends(owned_workspace), member: OrgMember = Dep
     _require_report_format(member, db, "pdf")
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
-    pdf_bytes = report_generator.generate_pdf_report(ws, incidents)
+    comp_rows = _get_competitor_rows(ws, db)
+    pdf_bytes = report_generator.generate_pdf_report(ws, incidents, comp_rows)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -776,7 +880,8 @@ def report_pptx(ws: Workspace = Depends(owned_workspace), member: OrgMember = De
     _require_report_format(member, db, "pptx")
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
-    pptx_bytes = report_generator.generate_pptx_report(ws, incidents)
+    comp_rows = _get_competitor_rows(ws, db)
+    pptx_bytes = report_generator.generate_pptx_report(ws, incidents, comp_rows)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pptx"
     return Response(content=pptx_bytes,
                     media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -789,7 +894,8 @@ def report_excel(ws: Workspace = Depends(owned_workspace), db: Session = Depends
     # Excel is available on every tier, including Standard — no gating here.
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(2000)).all()
-    xlsx_bytes = report_generator.generate_excel_export(ws, incidents)
+    comp_rows = _get_competitor_rows(ws, db)
+    xlsx_bytes = report_generator.generate_excel_export(ws, incidents, comp_rows)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-export.xlsx"
     return Response(content=xlsx_bytes,
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -823,3 +929,94 @@ def analytics_summary(ws: Workspace = Depends(owned_workspace), db: Session = De
         "platform": dict(platform.most_common(8)),
         "trend": [{"date": d, "count": c} for d, c in trend],
     }
+
+
+# ==================================================================
+# COMPETITOR ANALYSIS — tiered (2/5/8/unlimited), fully editable,
+# reusing the same real search mechanisms as the main collectors.
+# ==================================================================
+class CompetitorBody(BaseModel):
+    name: str
+
+
+@app.get("/api/workspaces/{ws_id}/competitors")
+def list_competitors(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> list[dict]:
+    comps = db.scalars(select(Competitor).where(Competitor.workspace_id == ws.id)
+                       .order_by(Competitor.created_at)).all()
+    return [{"id": c.id, "name": c.name} for c in comps]
+
+
+@app.post("/api/workspaces/{ws_id}/competitors")
+def add_competitor(body: CompetitorBody, ws: Workspace = Depends(owned_workspace),
+                   member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    from .services.auth import effective_plan, PLAN_COMPETITOR_LIMIT
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Competitor name can't be empty.")
+    org = db.get(Organization, member.organization_id)
+    limit = PLAN_COMPETITOR_LIMIT[effective_plan(org)]
+    existing_count = db.scalar(select(func.count(Competitor.id)).where(Competitor.workspace_id == ws.id))
+    if existing_count >= limit:
+        raise HTTPException(422, f"Your plan allows tracking up to {limit} competitors. Upgrade to add more.")
+    if db.scalar(select(Competitor).where(Competitor.workspace_id == ws.id, Competitor.name == name)):
+        raise HTTPException(422, f'"{name}" is already being tracked.')
+    comp = Competitor(workspace_id=ws.id, name=name)
+    db.add(comp)
+    db.commit()
+    return {"id": comp.id, "name": comp.name}
+
+
+@app.delete("/api/workspaces/{ws_id}/competitors/{comp_id}")
+def remove_competitor(ws_id: str, comp_id: str, ws: Workspace = Depends(owned_workspace),
+                      db: Session = Depends(get_db)) -> dict:
+    comp = db.get(Competitor, comp_id)
+    if not comp or comp.workspace_id != ws.id:
+        raise HTTPException(404, "Not found")
+    db.execute(delete(CompetitorMention).where(CompetitorMention.competitor_id == comp_id))
+    db.delete(comp)
+    db.commit()
+    return {"ok": True}
+
+
+def _run_competitor_scan(ws_id: str) -> None:
+    from .db import SessionLocal
+    from .services.competitor_scan import scan_competitor
+    db = SessionLocal()
+    try:
+        comps = db.scalars(select(Competitor).where(Competitor.workspace_id == ws_id)).all()
+        for comp in comps:
+            try:
+                scan_competitor(db, comp)
+            except Exception:  # noqa: BLE001 — one competitor failing shouldn't block the others
+                log.exception("Competitor scan failed for %s", comp.name)
+    finally:
+        db.close()
+
+
+@app.post("/api/workspaces/{ws_id}/competitors/scan")
+def trigger_competitor_scan(tasks: BackgroundTasks, ws: Workspace = Depends(owned_workspace)) -> dict:
+    tasks.add_task(_run_competitor_scan, ws.id)
+    return {"ok": True, "message": "Competitor scan started"}
+
+
+@app.get("/api/workspaces/{ws_id}/competitors/analytics")
+def competitor_analytics(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
+                         range: str | None = None, start: str | None = None, end: str | None = None) -> dict:
+    """Comparative data: your own brand's mention volume and sentiment
+    alongside every tracked competitor's — same date filter as the rest of
+    the app, so this stays consistent with whatever the dashboard shows."""
+    from collections import Counter
+    own_q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
+    own_incidents = db.scalars(own_q).all()
+    own_sentiment = Counter(i.sentiment for i in own_incidents if i.sentiment)
+
+    comps = db.scalars(select(Competitor).where(Competitor.workspace_id == ws.id)).all()
+    rows = [{"name": ws.name, "is_you": True, "mentions": len(own_incidents),
+            "sentiment": dict(own_sentiment)}]
+    for comp in comps:
+        mentions = db.scalars(select(CompetitorMention).where(CompetitorMention.competitor_id == comp.id)).all()
+        sent = Counter(m.sentiment for m in mentions if m.sentiment)
+        platform = Counter(m.platform for m in mentions)
+        rows.append({"name": comp.name, "is_you": False, "mentions": len(mentions),
+                    "sentiment": dict(sent), "platform": dict(platform)})
+    return {"rows": rows}

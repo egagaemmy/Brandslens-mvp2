@@ -112,7 +112,7 @@ def generate_executive_summary(workspace: Workspace, incidents: list[Incident]) 
 # ==================================================================
 # PDF REPORT
 # ==================================================================
-def generate_pdf_report(workspace: Workspace, incidents: list[Incident]) -> bytes:
+def generate_pdf_report(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=22 * mm, bottomMargin=18 * mm,
                             leftMargin=18 * mm, rightMargin=18 * mm)
@@ -211,6 +211,26 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident]) -> byte
         story.append(row)
         story.append(Spacer(1, 4))
 
+    if competitor_rows:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Competitive Landscape", h2_style))
+        comp_rows = [["Brand", "Mentions", "Positive", "Neutral", "Negative"]]
+        for r in competitor_rows:
+            sent = r.get("sentiment", {})
+            label = f"{_safe(r['name'])} (you)" if r.get("is_you") else _safe(r["name"])
+            comp_rows.append([label, str(r.get("mentions", 0)), str(sent.get("Positive", 0)),
+                             str(sent.get("Neutral", 0)), str(sent.get("Negative", 0))])
+        ct = Table(comp_rows, colWidths=[54 * mm, 30 * mm, 30 * mm, 30 * mm, 30 * mm])
+        ct.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), NAVY), ("TEXTCOLOR", (0, 0), (-1, 0), OFFWHITE),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [OFFWHITE, HexColor("#FFFFFF")]),
+            ("GRID", (0, 0), (-1, -1), 0.4, HexColor("#E5E7EB")),
+            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        story.append(ct)
+
     story.append(Spacer(1, 16))
     story.append(HRFlowable(width="100%", color=HexColor("#E5E7EB"), thickness=1))
     story.append(Paragraph(f"{BRAND['name']} · {BRAND['tagline']}", sub_style))
@@ -222,7 +242,7 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident]) -> byte
 # ==================================================================
 # EXCEL EXPORT
 # ==================================================================
-def generate_excel_export(workspace: Workspace, incidents: list[Incident]) -> bytes:
+def generate_excel_export(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Incidents"
@@ -295,6 +315,26 @@ def generate_excel_export(workspace: Workspace, incidents: list[Incident]) -> by
         summary.cell(row=row, column=2, value=sev_counts.get(sev, 0))
     summary.column_dimensions["A"].width = 60
     summary.column_dimensions["B"].width = 10
+
+    if competitor_rows:
+        comp_sheet = wb.create_sheet("Competitors")
+        comp_headers = ["Brand", "Mentions", "Positive", "Neutral", "Negative"]
+        for col, h in enumerate(comp_headers, start=1):
+            cell = comp_sheet.cell(row=1, column=col, value=h)
+            cell.fill = header_fill; cell.font = header_font
+            cell.alignment = Alignment(horizontal="left", vertical="center"); cell.border = border
+        comp_sheet.row_dimensions[1].height = 22
+        for r, comp in enumerate(competitor_rows, start=2):
+            sent = comp.get("sentiment", {})
+            label = f"{comp['name']} (you)" if comp.get("is_you") else comp["name"]
+            values = [label, comp.get("mentions", 0), sent.get("Positive", 0), sent.get("Neutral", 0), sent.get("Negative", 0)]
+            for c, v in enumerate(values, start=1):
+                cell = comp_sheet.cell(row=r, column=c, value=v)
+                cell.border = border
+                if comp.get("is_you"):
+                    cell.font = Font(bold=True, color=BRAND["amber_dark"])
+        for i, w in enumerate([28, 12, 12, 12, 12], start=1):
+            comp_sheet.column_dimensions[get_column_letter(i)].width = w
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -412,7 +452,10 @@ def _pptx_chart_slide(prs, title: str, categories: list, values: list, chart_typ
         plot.has_data_labels = True
         plot.data_labels.number_format = "0"
         plot.data_labels.number_format_is_linked = False
-        if colors and chart_type in (XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT):
+        if colors and len(colors) > 1:
+            # Per-point coloring — needed whenever different bars/slices need
+            # different colors (e.g. "you" in amber vs. competitors in navy),
+            # not just for pie/doughnut charts.
             for i, point in enumerate(plot.series[0].points):
                 if i < len(colors):
                     point.format.fill.solid()
@@ -456,7 +499,7 @@ def _pptx_top_incidents_slides(prs, incidents: list[Incident]):
     return prs
 
 
-def generate_pptx_report(workspace: Workspace, incidents: list[Incident]) -> bytes:
+def generate_pptx_report(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None) -> bytes:
     prs = Presentation()
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
@@ -489,6 +532,13 @@ def generate_pptx_report(workspace: Workspace, incidents: list[Incident]) -> byt
     trend = list(by_day.items())[-14:]
     _pptx_chart_slide(prs, "Mentions Over Time", [d for d, _ in trend], [c for _, c in trend],
                       XL_CHART_TYPE.LINE_MARKERS, colors=[PPTX_AMBER])
+
+    if competitor_rows:
+        names = [r["name"] + (" (you)" if r.get("is_you") else "") for r in competitor_rows]
+        mentions = [r.get("mentions", 0) for r in competitor_rows]
+        colors = [PPTX_AMBER if r.get("is_you") else PPTX_NAVY for r in competitor_rows]
+        _pptx_chart_slide(prs, "Competitive Landscape — Mention Volume", names, mentions,
+                          XL_CHART_TYPE.COLUMN_CLUSTERED, colors=colors)
 
     _pptx_top_incidents_slides(prs, incidents)
 

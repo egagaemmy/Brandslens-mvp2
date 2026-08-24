@@ -84,6 +84,57 @@ def check_rate_limit(client_ip: str) -> bool:
     return True
 
 
+def answer_app_chat(message: str, history: list[dict], workspace_name: str, mode: str, stats: dict) -> str:
+    """The in-app 'Ask BrandsLens' copilot — a completely different system
+    from the public marketing bot above. This one is authenticated, scoped
+    to one real workspace, and grounded in that workspace's actual current
+    numbers (passed in as `stats`), not general product facts. `mode`
+    genuinely changes the instruction, not just cosmetic framing: 'basic'
+    (Growth) answers straightforwardly from the numbers given; 'advanced'
+    (Professional/Enterprise) is explicitly asked to reason about patterns
+    across the data and give real, specific recommendations."""
+    if not ANTHROPIC_API_KEY:
+        return "I'm not fully connected yet — please contact support and a real person will help in the meantime."
+    if not message or not message.strip():
+        return "What would you like to know about this workspace's monitoring?"
+    if len(message) > 2000:
+        return "That's a lot to take in at once — could you ask in a shorter message?"
+
+    depth_instruction = ("Answer straightforwardly and concisely from the numbers given below." if mode == "basic" else
+                         "This is the advanced tier — don't just recite the numbers back. Look for patterns "
+                         "across severity, sentiment, platform, and tags, and give specific, actionable "
+                         "recommendations grounded in what's actually in the data, not generic advice.")
+    system = f"""You are the in-app monitoring copilot for the BrandsLens workspace "{workspace_name}". \
+You have access to this workspace's real current data below — answer using ONLY this data, never invent \
+numbers or incidents that aren't shown here. If something isn't in the data provided, say so plainly \
+rather than guessing.
+
+{depth_instruction}
+
+Current workspace data:
+{stats}
+
+Keep answers to a few sentences unless the question genuinely calls for more detail. Never discuss other \
+customers' data, internal system architecture, or anything outside this workspace's own monitoring."""
+
+    messages = []
+    for turn in (history or [])[-6:]:
+        role = turn.get("role")
+        content = turn.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content[:2000]})
+    messages.append({"role": "user", "content": message.strip()})
+
+    try:
+        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        resp = client.messages.create(model=CLASSIFIER_MODEL, max_tokens=500, system=system, messages=messages)
+        return "".join(b.text for b in resp.content if b.type == "text").strip() or \
+            "I couldn't quite form an answer to that — could you rephrase?"
+    except Exception:  # noqa: BLE001
+        log.exception("In-app chat call failed")
+        return "Something went wrong on my end — please try again in a moment."
+
+
 def answer(message: str, history: list[dict] | None = None) -> str:
     if not ANTHROPIC_API_KEY:
         return ("I'm not fully connected yet — please use the contact form for Enterprise "

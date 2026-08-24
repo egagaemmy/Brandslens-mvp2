@@ -22,6 +22,13 @@ PLAN_MEMBER_LIMIT = {"standard": 3, "growth": 10, "professional": 25, "enterpris
 # Historical search reach, in days. 0 means the feature isn't available at
 # all on that tier — Standard doesn't get it.
 PLAN_HISTORICAL_DAYS = {"standard": 0, "growth": 365 * 5, "professional": 365 * 10, "enterprise": 365 * 100}
+# The in-app "Ask BrandsLens" copilot (distinct from the public marketing
+# bot) — not available on Standard at all. Growth gets straightforward data
+# Q&A; Professional and Enterprise get a deeper analyst mode that's asked
+# to reason about patterns and give real recommendations, not just recite
+# numbers back.
+PLAN_APP_CHAT_MODE = {"standard": None, "growth": "basic", "professional": "advanced", "enterprise": "advanced"}
+PLAN_COMPETITOR_LIMIT = {"standard": 2, "growth": 5, "professional": 8, "enterprise": 999}
 # Report format access, cumulative by tier — Excel is available to everyone,
 # PDF from Growth up, PPTX from Professional up.
 PLAN_REPORT_FORMATS = {"standard": {"excel"}, "growth": {"excel", "pdf"},

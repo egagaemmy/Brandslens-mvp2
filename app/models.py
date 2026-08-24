@@ -200,6 +200,41 @@ class Incident(Base):
     workspace: Mapped["Workspace"] = relationship(back_populates="incidents")
 
 
+class Competitor(Base):
+    """A tracked competitor brand within a workspace — editable, tiered by
+    plan (2/5/8/unlimited). Deliberately a lighter-weight entity than
+    Incident: competitors are compared against, not escalated through
+    Media Room, so there's no severity or status workflow here."""
+    __tablename__ = "competitors"
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_competitor_ws_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CompetitorMention(Base):
+    """A single mention of a tracked competitor, found the same way brand
+    incidents are — reusing the existing collectors against the competitor's
+    name instead of the workspace's own keywords."""
+    __tablename__ = "competitor_mentions"
+    __table_args__ = (
+        Index("ix_compmention_ws_posted", "workspace_id", "posted_at"),
+        UniqueConstraint("competitor_id", "content_hash", name="uq_compmention_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    competitor_id: Mapped[str] = mapped_column(ForeignKey("competitors.id"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text, default="")
+    platform: Mapped[str] = mapped_column(String(60), default="News")
+    sentiment: Mapped[str] = mapped_column(String(12), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class ScanRun(Base):
     __tablename__ = "scan_runs"
 
