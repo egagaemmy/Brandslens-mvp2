@@ -294,7 +294,8 @@ def _inc_dict(i: Incident) -> dict:
     return {"id": i.id, "ref": i.ref, "title": i.title, "url": i.url, "author": i.author,
             "platform": i.platform, "lang": i.lang, "sev": i.severity, "sev_overridden": i.severity_overridden,
             "sentiment": i.sentiment, "tags": i.tags, "rationale": i.rationale, "status": i.status,
-            "reach": i.reach, "posted": i.posted_at.isoformat() if i.posted_at else None, "source": i.source}
+            "reach": i.reach, "posted": i.posted_at.isoformat() if i.posted_at else None, "source": i.source,
+            "found_historically": i.found_historically}
 
 
 class StatusBody(BaseModel):
@@ -325,7 +326,13 @@ def set_severity(incident_id: str, body: SeverityBody, member: OrgMember = Depen
     """The AI's classification is a starting point, not the final word — the
     team knows their own brand and context better than any automated system
     ever will, so severity is always editable, and we track that it was a
-    human decision rather than silently overwriting the AI's original call."""
+    human decision rather than silently overwriting the AI's original call.
+
+    Manually marking something HIGH now genuinely escalates it into Media
+    Room, the same as an AI-classified HIGH does — this was a real gap
+    before: a human catching something the AI under-classified (exactly why
+    this feature exists) silently never triggered the escalation workflow
+    it's meant to."""
     if body.severity not in ("HIGH", "MEDIUM", "WATCH"):
         raise HTTPException(422, "Severity must be HIGH, MEDIUM, or WATCH.")
     inc = db.get(Incident, incident_id)
@@ -334,9 +341,15 @@ def set_severity(incident_id: str, body: SeverityBody, member: OrgMember = Depen
     ws = db.get(Workspace, inc.workspace_id)
     if not ws or ws.organization_id != member.organization_id:
         raise HTTPException(404, "Not found")
+    was_escalated = inc.severity in ("HIGH", "MEDIUM")
     inc.severity = body.severity
     inc.severity_overridden = True
     db.commit()
+    if body.severity in ("HIGH", "MEDIUM") and not was_escalated:
+        existing_case = db.scalar(select(MediaRoomCase).where(MediaRoomCase.incident_id == inc.id))
+        if not existing_case:
+            from .services import media_room
+            media_room.open_case(db, inc)
     return {"ok": True, "severity": inc.severity}
 
 
@@ -394,7 +407,7 @@ def _run_historical_scan(ws_id: str, days_back: int) -> None:
             try:
                 kwargs = {"days_back": days_back} if source in HISTORICAL_CAPABLE else {}
                 candidates = mod.collect(db, ws, **kwargs)
-                summary = pipeline.ingest_candidates(db, ws, candidates, source=source)
+                summary = pipeline.ingest_candidates(db, ws, candidates, source=source, found_historically=True)
                 run.finished_at = now_utc()
                 run.candidates, run.new_incidents, run.high_count = summary["candidates"], summary["new"], summary["high"]
                 log.info("historical/%s / %s (%sd back): %s", source, ws.name, days_back, summary)

@@ -873,6 +873,7 @@ select.sev-sel-watch{color:var(--green);border-color:#6EE7B7;background:#ECFDF5;
         <div class="filters">
           <div class="f-group"><label>Severity</label><select id="fSev"><option value="">All</option><option>HIGH</option><option>MEDIUM</option><option>WATCH</option></select></div>
           <div class="f-group"><label>Status</label><select id="fStatus"><option value="">All</option><option>open</option><option>resolved</option><option>dismissed</option></select></div>
+          <div class="f-group"><label>Found via</label><select id="fSource"><option value="">All</option><option value="historical">Historical search</option><option value="regular">Regular scan</option></select></div>
           <div class="f-group"><label>Search</label><input id="fSearch" placeholder="Title, ref, author…" style="width:220px"></div>
           <div class="spacer"></div>
           <button class="btn btn-outline btn-sm" id="refreshLogBtn">↻ Refresh</button>
@@ -1515,8 +1516,9 @@ async function renderLog() {
   if (!ACTIVE_WS) return;
   let data; try { data = await api(`/api/workspaces/${ACTIVE_WS}?_=1${buildDateQuery()}`); } catch (e) { toast("Couldn't load incidents", e.message, "warn"); return; }
   let rows = data.incidents || [];
-  const sev = $("#fSev").value, status = $("#fStatus").value, q = $("#fSearch").value.toLowerCase();
+  const sev = $("#fSev").value, status = $("#fStatus").value, q = $("#fSearch").value.toLowerCase(), src = $("#fSource").value;
   rows = rows.filter(i => (!sev || i.sev === sev) && (!status || i.status === status) &&
+    (!src || (src === "historical" ? i.found_historically : !i.found_historically)) &&
     (!q || i.title.toLowerCase().includes(q) || i.ref.toLowerCase().includes(q)));
   $("#logEmpty").style.display = rows.length ? "none" : "block";
   $("#logBody").innerHTML = rows.map(i => `<tr data-inc="${i.id}">
@@ -1526,7 +1528,7 @@ async function renderLog() {
       <option value="MEDIUM" ${i.sev==='MEDIUM'?'selected':''}>MEDIUM</option>
       <option value="WATCH" ${i.sev==='WATCH'?'selected':''}>WATCH</option>
     </select>${i.sev_overridden ? '<div style="font-size:9.5px;color:var(--faint);margin-top:2px">manually set</div>' : ''}</td>
-    <td style="max-width:380px">${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener" class="mention-link">${esc(i.title)}</a>` : esc(i.title)}</td>
+    <td style="max-width:380px">${i.found_historically ? '<span class="pill p-lang" style="margin-right:6px;font-size:9px">🕐 HISTORICAL</span>' : ''}${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener" class="mention-link">${esc(i.title)}</a>` : esc(i.title)}</td>
     <td>${i.platform}</td>
     <td>${i.url ? `<button class="copy-link-btn" data-copy-url="${esc(i.url)}" title="Copy link">⧉</button>` : `<span style="color:var(--faint);font-size:11px">—</span>`}</td>
     <td><select class="status-sel" data-inc-status="${i.id}"><option ${i.status==='open'?'selected':''}>open</option><option ${i.status==='resolved'?'selected':''}>resolved</option><option ${i.status==='dismissed'?'selected':''}>dismissed</option></select></td>
@@ -1544,7 +1546,7 @@ async function renderLog() {
     } catch (e) { toast("Couldn't update severity", e.message, "warn"); }
   });
 }
-["fSev","fStatus"].forEach(id => $("#"+id).addEventListener("change", renderLog));
+["fSev","fStatus","fSource"].forEach(id => $("#"+id).addEventListener("change", renderLog));
 $("#fSearch").addEventListener("input", renderLog);
 $("#refreshLogBtn").onclick = renderLog;
 

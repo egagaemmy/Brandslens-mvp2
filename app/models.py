@@ -187,6 +187,7 @@ class Incident(Base):
     lang: Mapped[str] = mapped_column(String(8), default="en")
     severity: Mapped[str] = mapped_column(String(10), default="WATCH")   # HIGH / MEDIUM / WATCH
     severity_overridden: Mapped[bool] = mapped_column(Boolean, default=False)  # True once a human has changed it
+    found_historically: Mapped[bool] = mapped_column(Boolean, default=False)  # True if found via a historical search, not the regular ongoing scan
     sentiment: Mapped[str] = mapped_column(String(12), default="")
     tags: Mapped[list] = mapped_column(JSON, default=list)              # FRAUD, DOMAIN RISK, DISCLOSURE RISK, STRATEGIC
     rationale: Mapped[str] = mapped_column(Text, default="")

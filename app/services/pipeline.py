@@ -47,7 +47,7 @@ def _next_ref(db: Session, ws: Workspace) -> str:
     return f"{prefix}-{1000 + n + 1}"
 
 
-def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source: str) -> dict:
+def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source: str, found_historically: bool = False) -> dict:
     """candidates: [{"text","url","author","platform","posted_at"(datetime|None),"reach"}]"""
     survivors = [c for c in candidates if _keyword_prefilter(ws, c["text"])]
     if not survivors:
@@ -86,6 +86,7 @@ def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source
             tags=cls.get("tags", []), rationale=cls.get("rationale", ""),
             reach=int(cand.get("reach") or 0), content_hash=chash, source=source,
             posted_at=cand.get("posted_at") or datetime.now(timezone.utc),
+            found_historically=found_historically,
         )
         db.add(inc)
         db.flush()
@@ -95,6 +96,10 @@ def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source
             high += 1
             case = media_room.open_case(db, inc)
             slack_alert(f":rotating_light: HIGH — {ws.name}\n{inc.ref} · {inc.platform} · {inc.title[:200]}\n{inc.url}")
+            log.info("Opened Media Room case %s for %s", case.id, inc.ref)
+        elif inc.severity == "MEDIUM":
+            case = media_room.open_case(db, inc)
+            slack_alert(f":warning: MEDIUM — {ws.name}\n{inc.ref} · {inc.platform} · {inc.title[:200]}\n{inc.url}")
             log.info("Opened Media Room case %s for %s", case.id, inc.ref)
 
     db.commit()
