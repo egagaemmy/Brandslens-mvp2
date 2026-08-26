@@ -31,6 +31,11 @@ X_BEARER_TOKEN = env("X_BEARER_TOKEN")
 
 # --- Alerts ---
 RESEND_API_KEY = env("RESEND_API_KEY")
+# Points at whatever email marketing platform you choose — Mailchimp,
+# ConvertKit, Brevo, etc. all accept an incoming webhook or a Zapier/Make
+# relay URL here. Leave unset and signups still land safely in our own
+# database; nothing is ever lost either way.
+NEWSLETTER_WEBHOOK_URL = env("NEWSLETTER_WEBHOOK_URL")
 ADMIN_SETUP_SECRET = env("ADMIN_SETUP_SECRET")  # temporary — protects the one-time /api/setup/create-admin route
 MAIL_FROM = env("MAIL_FROM", "watch@brandslens.app")
 ENTERPRISE_INQUIRY_EMAIL = env("ENTERPRISE_INQUIRY_EMAIL", "kgrnigeria@gmail.com")

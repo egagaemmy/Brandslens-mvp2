@@ -93,6 +93,29 @@ def draft_statement(db: Session, case: MediaRoomCase, subject: str, body: str,
     return stmt
 
 
+def send_escalation(db: Session, case: MediaRoomCase, template_key: str, recipient_name: str,
+                    recipient_email: str, subject: str, body: str, sent_by_name: str) -> "EscalationLog":
+    """The actual 'compose and route' action a real Media Room needs — not
+    just a state transition. Creates a real, readable log entry (what the
+    UI displays), attempts genuine email delivery via Resend if configured,
+    and still records the action in the tamper-evident hash chain, since
+    that trail exists specifically to prove what actually happened here."""
+    from ..models import EscalationLog
+    from .mailer import send_email
+    email_sent = False
+    if recipient_email:
+        html = f"<p>{body}</p>".replace("\n", "<br>")
+        email_sent = send_email(recipient_email, subject, html)
+    log_entry = EscalationLog(case_id=case.id, workspace_id=case.workspace_id, template_key=template_key,
+                              recipient_name=recipient_name, recipient_email=recipient_email,
+                              subject=subject, body=body, sent_by_name=sent_by_name, email_sent=email_sent)
+    db.add(log_entry)
+    _audit(db, case, actor=sent_by_name, action="escalation_sent",
+          detail={"template": template_key, "recipient": recipient_name, "email_sent": email_sent})
+    db.commit()
+    return log_entry
+
+
 def sla_remaining_hours(case: MediaRoomCase) -> float:
     elapsed = (datetime.now(timezone.utc) - aware(case.sla_started_at)).total_seconds() / 3600
     return case.sla_target_hours - elapsed
@@ -118,7 +141,14 @@ def _audit(db: Session, case: MediaRoomCase, actor: str, action: str, detail: di
                       .order_by(MediaRoomAudit.at.desc()).limit(1)).first()
     prev_hash = last.row_hash if last else "genesis"
     at = datetime.now(timezone.utc)
-    payload = json.dumps({"actor": actor, "action": action, "detail": detail, "at": at.isoformat()}, sort_keys=True)
+    # Hash against aware(at)'s isoformat, not at's directly — SQLite drops
+    # timezone info on a round trip (see models.aware's own docstring), so
+    # without this normalization the hash computed here would never match
+    # what verify_chain recomputes after re-fetching the row, flagging every
+    # legitimate entry as "tampered" even though nothing touched it. This
+    # was a real, confirmed bug, not a hypothetical edge case — verified by
+    # reproducing it directly before this fix.
+    payload = json.dumps({"actor": actor, "action": action, "detail": detail, "at": aware(at).isoformat()}, sort_keys=True)
     row_hash = hashlib.sha256((prev_hash + payload).encode()).hexdigest()
     entry = MediaRoomAudit(case_id=case.id, actor=actor, action=action, detail=detail,
                           prev_hash=prev_hash, row_hash=row_hash, at=at)
@@ -134,7 +164,7 @@ def verify_chain(db: Session, case_id: str) -> bool:
     prev = "genesis"
     for row in rows:
         payload = json.dumps({"actor": row.actor, "action": row.action, "detail": row.detail,
-                              "at": row.at.isoformat()}, sort_keys=True)
+                              "at": aware(row.at).isoformat()}, sort_keys=True)
         expected = hashlib.sha256((prev + payload).encode()).hexdigest()
         if expected != row.row_hash or row.prev_hash != prev:
             return False

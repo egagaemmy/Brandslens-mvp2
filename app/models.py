@@ -304,6 +304,83 @@ class MediaRoomAudit(Base):
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class EscalationContact(Base):
+    """Named, per-workspace escalation routing — configured by the workspace
+    admin, not the AI. This is exactly the gap between having a Media Room
+    that tracks state and having one that actually tells a team who to call:
+    'who handles fraud alerts' is a business decision only the customer can
+    make, never something the system should guess at."""
+    __tablename__ = "escalation_contacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(200), default="")
+    email: Mapped[str] = mapped_column(String(320))
+    category: Mapped[str] = mapped_column(String(30), default="general")
+    # matches media_room.PLAYBOOKS keys (fraud/domain/disclosure/misinfo/regulator) or "general"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class EscalationLog(Base):
+    """A real, dedicated record of every escalation actually composed and
+    sent — who it went to, what template, what it said. Separate from the
+    generic hash-chained audit trail (which still records this happened,
+    for tamper-evidence) because this is the table the UI actually reads
+    from for a clean, readable history — the audit trail is for proving
+    nothing was altered after the fact, not for browsing day to day."""
+    __tablename__ = "escalation_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    case_id: Mapped[str] = mapped_column(ForeignKey("media_room_cases.id"), index=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    template_key: Mapped[str] = mapped_column(String(30), default="general")
+    recipient_name: Mapped[str] = mapped_column(String(200), default="")
+    recipient_email: Mapped[str] = mapped_column(String(320), default="")
+    subject: Mapped[str] = mapped_column(String(300), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    sent_by_name: Mapped[str] = mapped_column(String(200), default="")
+    email_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class NewsletterSubscriber(Base):
+    """Deliberately platform-agnostic: BrandsLens is always the source of
+    truth for the list itself (so the customer never loses it switching
+    tools), with a webhook forward on signup as the actual integration
+    point — see services/newsletter.py. Swapping email marketing platforms
+    later is a config change, not a rebuild."""
+    __tablename__ = "newsletter_subscribers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    subscribed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    source: Mapped[str] = mapped_column(String(60), default="website")
+    forwarded_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class BlogPost(Base):
+    """BrandsLens's own company blog — deliberately served with real,
+    individually crawlable URLs (see /blog and /blog/{slug} in main.py),
+    not hidden behind the single-page app's JS routing, since a blog post
+    nobody's search engine can actually index has no SEO value at all."""
+    __tablename__ = "blog_posts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(220), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    excerpt: Mapped[str] = mapped_column(Text, default="")
+    body_html: Mapped[str] = mapped_column(Text, default="")
+    cover_image: Mapped[str] = mapped_column(Text, default="")  # URL or a data: URI from direct upload
+    video_url: Mapped[str] = mapped_column(String(500), default="")  # YouTube/Vimeo embed link
+    meta_description: Mapped[str] = mapped_column(String(300), default="")
+    author_name: Mapped[str] = mapped_column(String(200), default="BrandsLens Team")
+    status: Mapped[str] = mapped_column(String(12), default="draft")  # draft / published
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class TipLineMessage(Base):
     """Raw inbound forwards from the Telegram tip-line bot, before they're
     turned into (or rejected from becoming) an Incident. Keeping the raw

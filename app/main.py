@@ -22,7 +22,8 @@ from .config import FRONTEND_ORIGIN, APP_NAME, ADMIN_SETUP_SECRET
 from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
-                     MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention, now_utc, aware)
+                     MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention,
+                     EscalationContact, EscalationLog, BlogPost, NewsletterSubscriber, now_utc, aware)
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -537,6 +538,86 @@ def get_audit(case_id: str, member: OrgMember = Depends(active_member), db: Sess
 
 
 # ==================================================================
+# ESCALATION CONTACTS — configured by the workspace admin, not the AI.
+# This is what actually lets Media Room tell a team WHO to escalate to.
+# ==================================================================
+class EscalationContactBody(BaseModel):
+    name: str
+    title: str = ""
+    email: str
+    category: str = "general"
+
+
+@app.get("/api/workspaces/{ws_id}/escalation-contacts")
+def list_escalation_contacts(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(EscalationContact).where(EscalationContact.workspace_id == ws.id)
+                      .order_by(EscalationContact.created_at)).all()
+    return [{"id": c.id, "name": c.name, "title": c.title, "email": c.email, "category": c.category} for c in rows]
+
+
+@app.post("/api/workspaces/{ws_id}/escalation-contacts")
+def add_escalation_contact(body: EscalationContactBody, ws: Workspace = Depends(owned_workspace),
+                           member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    if member.role == "member":
+        raise HTTPException(403, "Only an Owner or Team Lead can configure escalation contacts.")
+    valid_categories = set(media_room.PLAYBOOKS.keys()) | {"general"}
+    if body.category not in valid_categories:
+        raise HTTPException(422, f"Category must be one of: {', '.join(sorted(valid_categories))}")
+    if not body.name.strip() or not body.email.strip():
+        raise HTTPException(422, "Name and email are required.")
+    contact = EscalationContact(workspace_id=ws.id, name=body.name.strip(), title=body.title.strip(),
+                               email=body.email.strip(), category=body.category)
+    db.add(contact)
+    db.commit()
+    return {"id": contact.id, "name": contact.name, "title": contact.title,
+           "email": contact.email, "category": contact.category}
+
+
+@app.delete("/api/workspaces/{ws_id}/escalation-contacts/{contact_id}")
+def remove_escalation_contact(ws_id: str, contact_id: str, ws: Workspace = Depends(owned_workspace),
+                              member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    if member.role == "member":
+        raise HTTPException(403, "Only an Owner or Team Lead can configure escalation contacts.")
+    contact = db.get(EscalationContact, contact_id)
+    if not contact or contact.workspace_id != ws.id:
+        raise HTTPException(404, "Not found")
+    db.delete(contact)
+    db.commit()
+    return {"ok": True}
+
+
+class ComposeEscalationBody(BaseModel):
+    template_key: str
+    contact_id: str
+    subject: str
+    body: str
+
+
+@app.post("/api/media-room/cases/{case_id}/escalate")
+def compose_escalation(case_id: str, body: ComposeEscalationBody,
+                       member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    case = _case_in_org(case_id, member, db)
+    contact = db.get(EscalationContact, body.contact_id)
+    if not contact or contact.workspace_id != case.workspace_id:
+        raise HTTPException(404, "That contact wasn't found for this workspace.")
+    log_entry = media_room.send_escalation(db, case, body.template_key, contact.name, contact.email,
+                                           body.subject, body.body, member.name)
+    return {"ok": True, "email_sent": log_entry.email_sent,
+           "message": "Sent." if log_entry.email_sent else "Logged — email delivery isn't configured yet, but this escalation is fully recorded."}
+
+
+@app.get("/api/media-room/cases/{case_id}/escalations")
+def list_case_escalations(case_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> list[dict]:
+    case = _case_in_org(case_id, member, db)
+    rows = db.scalars(select(EscalationLog).where(EscalationLog.case_id == case.id)
+                      .order_by(EscalationLog.created_at.desc())).all()
+    return [{"id": r.id, "template_key": r.template_key, "recipient_name": r.recipient_name,
+            "recipient_email": r.recipient_email, "subject": r.subject, "body": r.body,
+            "sent_by_name": r.sent_by_name, "email_sent": r.email_sent,
+            "created_at": r.created_at.isoformat()} for r in rows]
+
+
+# ==================================================================
 # BILLING
 # ==================================================================
 class CheckoutBody(BaseModel):
@@ -788,6 +869,131 @@ def setup_sync_schema(secret: str, db: Session = Depends(get_db)) -> dict:
                      "Schema was already up to date — nothing needed adding."}
 
 
+@app.get("/api/setup/seed-blog")
+def setup_seed_blog(secret: str, db: Session = Depends(get_db)) -> dict:
+    """Temporary, one-time-use route — publishes the four launch blog posts
+    directly to the live database. Idempotent: checks each post's slug
+    before inserting, so it's safe to call more than once without creating
+    duplicates. Protected by the same ADMIN_SETUP_SECRET pattern as the
+    other setup routes. Safe to remove after use, or leave in place since
+    calling it again with the same posts already published is a no-op."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+
+    posts = [
+        {
+            "title": "How to Choose the Best Media Monitoring Tool for Your Brand in 2026",
+            "excerpt": "A practical buyer's framework for evaluating media monitoring tools: what actually matters, what's marketing noise, and the questions worth asking before you sign anything.",
+            "meta_description": "A practical guide to choosing the best media monitoring tool for your brand: real-time coverage, AI severity scoring, fraud detection, and escalation workflows explained.",
+            "body_html": """<p>Most teams researching a media monitoring tool start with the same question: which one has the most sources? It's a reasonable place to start, and also the wrong question to lead with. Coverage matters, but coverage without judgement just produces a longer list of things nobody has time to read.</p>
+<p>Here is a more useful framework: five questions worth asking before you sign anything, drawn from what actually separates a genuinely useful <b>media monitoring tool</b> from a dashboard that quietly gets ignored after the first month.</p>
+<h2>1. Does it tell you what to do, or just what was said?</h2>
+<p>Traditional listening tools are built around a simple loop: collect mentions, display them, let a human sort through the noise. That loop works reasonably well when volume is low. It breaks down the moment your brand is mentioned fifty times a day across news, forums, and social platforms, most of it irrelevant, a small fraction genuinely urgent.</p>
+<p>A serious evaluation should include a direct test: feed the tool a mix of mentions, some routine, some genuinely concerning, and see whether it can tell the difference without a person doing all the work manually. AI severity scoring, done well, is the difference between a monitoring feed and an actual early warning system.</p>
+<h2>2. Can it track media mentions in the languages your audience actually uses?</h2>
+<p>A tool built primarily around English-language Western media will miss a meaningful share of what matters to a brand operating across African markets: pidgin, mixed-language forum posts, regional news outlets that never show up in a generic search index. If a vendor can't speak to this directly, treat that as a real gap, not a minor limitation.</p>
+<h2>3. Does it separate "mentioned" from "at risk"?</h2>
+<p>Being mentioned is neutral. Being impersonated, defrauded, or the subject of a coordinated misinformation push is not. The <b>best tools for media monitoring and tracking</b> distinguish between the two categories entirely, not just by keyword matching but by looking for the actual patterns of fraud and impersonation: look-alike domains, cloned social accounts, fabricated quotes. This is a fundamentally different capability from sentiment tracking, and most listening tools were never built to do it.</p>
+<h2>4. What happens after something serious is found?</h2>
+<p>This is the question most buyer's guides skip entirely, and it's often the most important one. A monitoring tool that surfaces a genuine crisis and then leaves your team to figure out what happens next, manually, in a spreadsheet or a scattered set of Slack messages, has only done half the job. Ask specifically: is there a defined escalation path? Can severity trigger a real workflow with SLA timers and a named owner, or does everything still depend on someone noticing in time?</p>
+<h2>5. Can you actually prove what happened, later?</h2>
+<p>If a serious incident ever ends up being reviewed by a regulator, a board, or your own legal team, "we saw it and dealt with it" needs to be demonstrable, not just remembered. Look for genuine audit trails: a record of who did what, when, that can't be quietly edited after the fact.</p>
+<h2>A shorter way to say all of this</h2>
+<p>The tools worth paying for treat monitoring as the beginning of a process, not the whole product. Coverage gets you visibility. Judgement gets you an early warning. A real workflow is what actually protects the brand when it matters.</p>""",
+        },
+        {
+            "title": "The Hidden Cost of Not Tracking Online Mentions: A Guide for African Brands",
+            "excerpt": "The mentions nobody's watching are rarely harmless. A look at what actually happens between the first quiet signal and the moment a brand notices, and what it costs in between.",
+            "meta_description": "Why online mentions tracking matters for African brands: the real cost of delayed detection, from fraud losses to reputational damage, and what proactive monitoring actually prevents.",
+            "body_html": """<p>Every brand of any size is being discussed somewhere right now, in places nobody on the team is currently looking. Most of that conversation is harmless. Some of it is not, and the gap between those two categories is exactly where damage accumulates, quietly, before anyone notices.</p>
+<p>This isn't a hypothetical risk. It's a predictable pattern, and understanding it is the first step toward a genuine <b>online mentions tracking</b> discipline rather than an occasional Google search when something already feels wrong.</p>
+<h2>The pattern almost always looks the same</h2>
+<p>A fraudulent account opens, using a brand's name and logo, promising an opportunity that doesn't exist. It gathers a small following quietly over days or weeks. By the time a customer complaint reaches the actual company, often through a support email or a frustrated comment on a legitimate page, real financial harm has already happened to real people, and the brand's name is attached to it whether it likes it or not.</p>
+<p>The same shape repeats with look-alike domains, misquoted statements picked up and repeated by secondary outlets, and coordinated negative campaigns that start small and specific before becoming general and hard to trace back to their origin.</p>
+<h2>What "hidden cost" actually means in practice</h2>
+<ul>
+<li><b>Financial exposure</b>: fraud conducted under a brand's name creates victims who reasonably expect the brand to help, refund, or explain, regardless of the fact that the company had no direct involvement.</li>
+<li><b>Regulatory exposure</b>: in regulated sectors, a delayed or absent response to a known impersonation scheme is itself a compliance question, not just a reputational one.</li>
+<li><b>Compounding narrative</b>: the longer a false or damaging claim circulates without a documented, timely response, the more it reads, fairly or not, as tacit confirmation.</li>
+<li><b>Internal cost</b>: teams without a monitoring discipline end up reacting to crises days later than they could have, under far more pressure than a same-day response would have required.</li>
+</ul>
+<h2>Why this matters more, not less, in fast-growing markets</h2>
+<p>Brands operating across Nigeria and wider African markets face a specific version of this problem: media landscapes that move quickly across WhatsApp, Twitter/X, and regional forums, often faster than traditional press monitoring was ever built to follow, combined with digital financial products that make brand impersonation for fraud a genuinely lucrative crime, not just a nuisance.</p>
+<p>A generic, Western-built listening tool frequently misses exactly the channels where this activity actually happens.</p>
+<h2>What proactive tracking changes</h2>
+<p>The value of consistent monitoring isn't found in the mentions that were always going to be fine. It's found in the handful, per quarter, per year, that would otherwise have gone unnoticed for days: the fraudulent account before it gathers a hundred victims instead of ten, the look-alike domain before it's indexed and trusted, the misquote before three other outlets have already repeated it as fact.</p>
+<p>None of that requires reading everything. It requires a system that reliably surfaces the handful of things that matter, quickly enough to still make a difference.</p>""",
+        },
+        {
+            "title": "Brand Impersonation and Fraud: How to Detect and Respond Before It Costs You",
+            "excerpt": "Look-alike domains and cloned accounts follow recognisable patterns. A practical guide to spotting them early, and building a response that actually protects the people being targeted.",
+            "meta_description": "How to detect brand impersonation and fraud early: look-alike domain patterns, cloned account warning signs, and a practical response framework for brand protection teams.",
+            "body_html": """<p>Brand impersonation rarely announces itself. It shows up as a slightly-off domain name, a social account with the right logo and the wrong intentions, a message that reads almost, but not quite, like something the company would actually say. Recognising the pattern early is the entire difference between a contained incident and a genuine crisis.</p>
+<h2>What look-alike domains actually look like</h2>
+<p>Fraudulent domains are built to survive a glance, not close inspection. Common patterns include:</p>
+<ul>
+<li>Character substitution: a zero for an "o", a lowercase "l" for an "i"</li>
+<li>Added or dropped words: "brandname-support" or "brandname-ng" instead of the real domain</li>
+<li>Different top-level domains entirely, especially ones that read as plausible in a specific market</li>
+<li>Homoglyphs: characters from other alphabets that render as visually near-identical to Latin letters</li>
+</ul>
+<p>One genuinely useful signal, often overlooked: a domain's actual history. A legitimate business's domain typically has years of archived history. A freshly registered look-alike domain usually has none at all, and that absence is itself informative, not just a technicality. Checking a domain against public web archives before assuming legitimacy is a small habit that catches a meaningful share of impersonation attempts early.</p>
+<h2>Cloned accounts follow a similar shape</h2>
+<p>They tend to appear quickly, use official brand assets without variation, and target a narrow, urgent action: send payment, click this link, confirm these details. The account is rarely trying to build a long-term audience. It's built to extract something specific before it gets reported and removed.</p>
+<h2>A response framework that actually holds up</h2>
+<h3>1. Verify quickly, but verify</h3>
+<p>Confirm the finding is genuine before acting publicly. A false alarm handled as a real one erodes trust in the process itself.</p>
+<h3>2. Document immediately</h3>
+<p>Screenshot everything, record the domain's registration and hosting details where available, and timestamp the discovery. This record matters later, for platform takedown requests, for regulators, and for any customers who were affected.</p>
+<h3>3. Escalate by severity, not by instinct</h3>
+<p>Not every impersonation attempt needs the same response speed. A dormant look-alike domain with no active content is a different priority from an account actively soliciting payments right now. A defined severity tier, with a real time target attached to each level, keeps the response proportionate and fast where it needs to be.</p>
+<h3>4. Notify the people actually at risk</h3>
+<p>Internal awareness isn't the goal. The goal is making sure anyone who might encounter the fraudulent version has a way to recognise it, through official channels, before they act on it.</p>
+<h3>5. Keep a real record of what was done</h3>
+<p>Not a memory of what happened, an actual, tamper-evident log: who found it, when, what action was taken, by whom. This is the record that holds up under later scrutiny, whether that's a board question or a regulatory one.</p>
+<h2>The underlying principle</h2>
+<p>Fraud built on a brand's name moves fast precisely because it counts on nobody watching closely enough, early enough. A consistent detection habit, paired with a response process that doesn't have to be improvised under pressure, closes that window before it costs anyone something real.</p>""",
+        },
+        {
+            "title": "From Detection to Resolution: Building a Real Crisis Escalation Workflow",
+            "excerpt": "Finding a problem is only the first half of the job. A look at what separates a genuine escalation workflow from a Slack channel and good intentions.",
+            "meta_description": "How to build a real crisis escalation workflow for brand and reputation incidents: SLA timers, named ownership, approval steps, and audit trails that actually hold up.",
+            "body_html": """<p>Most organisations discover their escalation process doesn't really exist at the worst possible moment: during an actual incident, when someone finally asks out loud, "who is supposed to handle this?" and the honest answer is nobody quite knows.</p>
+<p>A monitoring system that detects a serious incident and stops there has only completed half the job. What happens in the hours immediately after detection is usually what determines whether an incident stays small or becomes a genuine crisis.</p>
+<h2>Why "someone will see it eventually" isn't a process</h2>
+<p>Informal escalation, a message in a shared channel, an email forwarded to a manager, works fine until the person who usually handles it is unavailable, or the incident happens outside normal hours, or three people each assume someone else has already responded. None of that is a hypothetical. It's the default failure mode of any process that depends entirely on individual attention rather than a defined structure.</p>
+<h2>What a real workflow actually includes</h2>
+<h3>Severity-based response times, not a single standard</h3>
+<p>A confirmed fraud alert soliciting payments right now is not the same priority as a low-signal mention worth watching. Attaching a genuine time target to each severity level, and making that target visible, turns "we should get to this soon" into an actual accountable commitment.</p>
+<h3>Named ownership per category, decided in advance</h3>
+<p>Who handles a fraud alert. Who handles a regulatory notification. Who handles a domain takedown request. These should be decided calmly, in advance, by the people who actually run the organisation, not improvised in the middle of an incident by whoever happens to be online. A workflow that lets an admin configure named contacts per category, ahead of time, is doing something a generic alert system cannot.</p>
+<h3>A defined path through the incident, not just a status</h3>
+<p>Detected, under review, classified, escalated, resolved: a real workflow moves an incident through defined stages, so at any point anyone can answer "where are we on this" without a meeting.</p>
+<h3>Approval where it genuinely matters</h3>
+<p>Some categories of response, particularly anything touching regulators or public statements, should require a deliberate sign-off step before anything goes out. This isn't bureaucracy for its own sake. It's the difference between a considered response and something sent in the heat of the moment that the organisation later has to walk back.</p>
+<h3>A record that can't quietly change after the fact</h3>
+<p>When an incident is later reviewed, internally or by a regulator, the value of the record depends entirely on whether it can be trusted. A genuinely tamper-evident audit trail, where every action is chained to the one before it, is what makes "here is exactly what we did, and when" a demonstrable fact rather than a recollection.</p>
+<h2>The test worth applying</h2>
+<p>Ask the team a simple question: if a serious incident happened right now, this minute, would everyone involved know immediately what happens next, who owns it, and how fast a response is expected? If the honest answer involves any version of "we'd figure it out," that's not a workflow. It's a plan to improvise under pressure, and pressure is exactly the wrong time to be improvising.</p>""",
+        },
+    ]
+
+    created = []
+    for p in posts:
+        slug = _slugify(p["title"])
+        existing = db.scalar(select(BlogPost).where(BlogPost.slug == slug))
+        if existing:
+            continue
+        post = BlogPost(slug=slug, title=p["title"], excerpt=p["excerpt"], body_html=p["body_html"],
+                        meta_description=p["meta_description"], author_name="BrandsLens Team",
+                        status="published", published_at=now_utc())
+        db.add(post)
+        created.append(slug)
+    db.commit()
+    return {"ok": True, "created": created,
+           "message": f"{len(created)} post(s) published." if created else "All four posts were already published — nothing to do."}
+
+
 @app.post("/api/enterprise-inquiry")
 def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
     """Public, unauthenticated — this is the entire 'checkout flow' for
@@ -797,11 +1003,73 @@ def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
     return {"ok": True, "sent": sent}
 
 
+class NewsletterSubscribeBody(BaseModel):
+    email: str
+    source: str = "website"
+
+
+@app.post("/api/newsletter/subscribe")
+def newsletter_subscribe(body: NewsletterSubscribeBody, db: Session = Depends(get_db)) -> dict:
+    """Public, unauthenticated. BrandsLens is always the source of truth —
+    stored here first, no matter what. Forwarding to an external email
+    marketing platform (via NEWSLETTER_WEBHOOK_URL) is a bonus, never a
+    dependency: if that forward fails or isn't configured, the signup is
+    still safely recorded and nothing is lost."""
+    import re
+    from .config import NEWSLETTER_WEBHOOK_URL
+    email = body.email.strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(422, "That doesn't look like a valid email address.")
+    existing = db.scalar(select(NewsletterSubscriber).where(NewsletterSubscriber.email == email))
+    if existing:
+        return {"ok": True, "already_subscribed": True}
+    sub = NewsletterSubscriber(email=email, source=body.source)
+    db.add(sub)
+    db.commit()
+    if NEWSLETTER_WEBHOOK_URL:
+        try:
+            httpx.post(NEWSLETTER_WEBHOOK_URL, json={"email": email, "source": body.source}, timeout=8)
+        except Exception:  # noqa: BLE001 — the subscriber is already safely stored regardless
+            log.warning("Newsletter webhook forward failed for a new signup — subscriber is still saved locally")
+    return {"ok": True, "already_subscribed": False}
+
+
+@app.get("/api/newsletter/subscribers")
+def list_newsletter_subscribers(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    # This is BrandsLens's own marketing subscriber list, not workspace
+    # data — it must never be visible to a customer just because their own
+    # organization happens to be on a particular plan. Only the actual
+    # BrandsLens admin account (billing_status == "exempt") should ever see it.
+    org = db.get(Organization, member.organization_id)
+    if org.billing_status != "exempt":
+        raise HTTPException(403, "Not available on this account.")
+    rows = db.scalars(select(NewsletterSubscriber).order_by(NewsletterSubscriber.subscribed_at.desc())).all()
+    return {"total": len(rows), "subscribers": [{"email": r.email, "subscribed_at": r.subscribed_at.isoformat(),
+                                                  "source": r.source} for r in rows]}
+
+
+@app.get("/api/newsletter/export.csv")
+def export_newsletter_csv(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> Response:
+    org = db.get(Organization, member.organization_id)
+    if org.billing_status != "exempt":
+        raise HTTPException(403, "Not available on this account.")
+    rows = db.scalars(select(NewsletterSubscriber).order_by(NewsletterSubscriber.subscribed_at.desc())).all()
+    csv_lines = ["email,subscribed_at,source"] + [f"{r.email},{r.subscribed_at.isoformat()},{r.source}" for r in rows]
+    return Response(content="\n".join(csv_lines), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="brandslens-newsletter-subscribers.csv"'})
+
+
 def _render_legal_page(md_filename: str, title: str) -> str:
     import markdown, os
     path = os.path.join(os.path.dirname(__file__), "..", "legal", md_filename)
-    with open(path, "r", encoding="utf-8") as f:
-        body_html = markdown.markdown(f.read(), extensions=["extra"])
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            body_html = markdown.markdown(f.read(), extensions=["extra"])
+    except FileNotFoundError:
+        log.error("Legal document missing at %s — the legal/ folder likely didn't make it into this deploy", path)
+        body_html = (f"<p>This document isn't available right now — it looks like a file is missing from "
+                    f"this deployment. If you're the site owner, confirm the <code>legal/</code> folder "
+                    f"(containing {md_filename}) was included when this was last deployed.</p>")
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — BrandsLens</title>
@@ -827,6 +1095,203 @@ def legal_terms() -> str:
 @app.get("/legal/privacy", response_class=HTMLResponse)
 def legal_privacy() -> str:
     return _render_legal_page("PRIVACY_POLICY.md", "Privacy Policy")
+
+
+# ==================================================================
+# BLOG — served with real, individually crawlable URLs, since that's
+# the entire SEO point of having a blog at all. Public routes render
+# actual HTML with per-post meta tags; the admin API (JSON) powers the
+# in-app editor.
+# ==================================================================
+def _blog_page_wrapper(title: str, meta_description: str, canonical_path: str, body: str,
+                       og_image: str = "") -> str:
+    og_image_tag = f'<meta property="og:image" content="{og_image}">' if og_image else ""
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<meta name="description" content="{meta_description}">
+<link rel="canonical" href="https://brandslens.app{canonical_path}">
+<meta property="og:type" content="article">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{meta_description}">
+<meta property="og:url" content="https://brandslens.app{canonical_path}">
+{og_image_tag}
+<style>
+body{{font-family:-apple-system,Inter,Arial,sans-serif;margin:0;color:#1F2937;background:#F8FAFC}}
+.wrap{{max-width:760px;margin:0 auto;padding:0 20px 80px}}
+.topbar{{background:#0B0F17;padding:18px 20px;margin-bottom:40px}}
+.topbar a{{color:#fff;text-decoration:none;font-weight:700;font-size:17px}}
+.topbar .lens{{color:#D97706}}
+h1{{font-size:34px;color:#0F172A;line-height:1.25;margin-bottom:8px}}
+.meta{{color:#64748B;font-size:13.5px;margin-bottom:28px}}
+.cover{{width:100%;border-radius:12px;margin-bottom:28px;display:block}}
+.body-content{{font-size:16.5px;line-height:1.8}}
+.body-content h2{{font-size:23px;margin-top:38px;color:#0F172A}}
+.body-content h3{{font-size:18px;margin-top:28px;color:#0F172A}}
+.body-content p{{margin:16px 0}}
+.body-content img{{max-width:100%;border-radius:8px}}
+.body-content a{{color:#D97706}}
+.body-content ul,.body-content ol{{padding-left:24px}}
+.share-row{{display:flex;gap:12px;margin-top:44px;padding-top:24px;border-top:1px solid #E2E8F0}}
+.share-row a{{display:inline-flex;align-items:center;padding:8px 16px;border-radius:8px;background:#0F172A;
+             color:#fff;text-decoration:none;font-size:13px;font-weight:600}}
+.post-card{{background:#fff;border-radius:14px;padding:22px;margin-bottom:18px;border:1px solid #E5E7EB;
+           text-decoration:none;display:block;color:inherit}}
+.post-card h2{{font-size:21px;color:#0F172A;margin:0 0 8px}}
+.post-card p{{color:#475569;font-size:14.5px;margin:0}}
+.post-card .meta{{margin-bottom:10px;font-size:12.5px}}
+video-embed{{aspect-ratio:16/9;width:100%;display:block;border-radius:10px;margin-bottom:28px;border:none}}
+</style>
+</head><body>
+<div class="topbar"><a href="/">Brands<span class="lens">Lens</span></a></div>
+<div class="wrap">{body}</div>
+</body></html>"""
+
+
+@app.get("/blog", response_class=HTMLResponse)
+def blog_listing(db: Session = Depends(get_db)) -> str:
+    posts = db.scalars(select(BlogPost).where(BlogPost.status == "published")
+                       .order_by(BlogPost.published_at.desc())).all()
+    if not posts:
+        body = "<h1>The BrandsLens Blog</h1><p>New posts are on their way.</p>"
+    else:
+        cards = "".join(f"""<a class="post-card" href="/blog/{p.slug}">
+            <div class="meta">{p.published_at.strftime('%d %B %Y') if p.published_at else ''} · {p.author_name}</div>
+            <h2>{p.title}</h2><p>{p.excerpt}</p></a>""" for p in posts)
+        body = f"<h1>The BrandsLens Blog</h1><p style='color:#64748B;margin-bottom:32px'>Media monitoring, brand reputation, and fraud prevention — for teams protecting what they've built.</p>{cards}"
+    return _blog_page_wrapper("The BrandsLens Blog — Media Monitoring & Brand Reputation Insights",
+                              "Practical guidance on media monitoring, brand reputation, and fraud prevention for teams operating in African markets.",
+                              "/blog", body)
+
+
+@app.get("/blog/{slug}", response_class=HTMLResponse)
+def blog_post(slug: str, db: Session = Depends(get_db)) -> str:
+    post = db.scalar(select(BlogPost).where(BlogPost.slug == slug, BlogPost.status == "published"))
+    if not post:
+        return _blog_page_wrapper("Post not found — BrandsLens Blog", "This post isn't available.", f"/blog/{slug}",
+                                  "<h1>Post not found</h1><p>This post may have been unpublished or the link is incorrect. <a href='/blog'>Back to the blog</a>.</p>")
+    video_embed = f'<iframe video-embed src="{post.video_url}" allowfullscreen></iframe>' if post.video_url else ""
+    cover = f'<img class="cover" src="{post.cover_image}" alt="{post.title}">' if post.cover_image else ""
+    share_url = f"https://brandslens.app/blog/{post.slug}"
+    body = f"""<h1>{post.title}</h1>
+    <div class="meta">{post.published_at.strftime('%d %B %Y') if post.published_at else ''} · {post.author_name}</div>
+    {cover}{video_embed}
+    <div class="body-content">{post.body_html}</div>
+    <div class="share-row">
+      <a href="https://www.linkedin.com/sharing/share-offsite/?url={share_url}" target="_blank" rel="noopener">Share on LinkedIn</a>
+      <a href="https://twitter.com/intent/tweet?url={share_url}&text={post.title}" target="_blank" rel="noopener">Share on X</a>
+      <a href="https://www.facebook.com/sharer/sharer.php?u={share_url}" target="_blank" rel="noopener">Share on Facebook</a>
+    </div>"""
+    return _blog_page_wrapper(f"{post.title} — BrandsLens Blog", post.meta_description or post.excerpt,
+                              f"/blog/{post.slug}", body, og_image=post.cover_image)
+
+
+def _slugify(title: str) -> str:
+    import re
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", title.lower())).strip("-")[:200]
+
+
+class BlogPostBody(BaseModel):
+    title: str
+    excerpt: str = ""
+    body_html: str = ""
+    cover_image: str = ""
+    video_url: str = ""
+    meta_description: str = ""
+    author_name: str = "BrandsLens Team"
+
+
+def _require_exempt(member: OrgMember, db: Session) -> None:
+    org = db.get(Organization, member.organization_id)
+    if org.billing_status != "exempt":
+        raise HTTPException(403, "The blog is managed by the BrandsLens team.")
+
+
+@app.get("/api/admin/blog/posts")
+def admin_list_blog_posts(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> list[dict]:
+    _require_exempt(member, db)
+    posts = db.scalars(select(BlogPost).order_by(BlogPost.created_at.desc())).all()
+    return [_blog_post_dict(p) for p in posts]
+
+
+def _blog_post_dict(p: BlogPost) -> dict:
+    return {"id": p.id, "slug": p.slug, "title": p.title, "excerpt": p.excerpt, "body_html": p.body_html,
+           "cover_image": p.cover_image, "video_url": p.video_url, "meta_description": p.meta_description,
+           "author_name": p.author_name, "status": p.status,
+           "published_at": p.published_at.isoformat() if p.published_at else None,
+           "created_at": p.created_at.isoformat()}
+
+
+@app.post("/api/admin/blog/posts")
+def admin_create_blog_post(body: BlogPostBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    if not body.title.strip():
+        raise HTTPException(422, "Title is required.")
+    if len(body.cover_image) > 3_000_000:
+        raise HTTPException(422, "That image is too large — please use a smaller file or an external image URL.")
+    slug_base = _slugify(body.title)
+    slug = slug_base
+    i = 2
+    while db.scalar(select(BlogPost).where(BlogPost.slug == slug)):
+        slug = f"{slug_base}-{i}"
+        i += 1
+    post = BlogPost(slug=slug, title=body.title.strip(), excerpt=body.excerpt, body_html=body.body_html,
+                    cover_image=body.cover_image, video_url=body.video_url,
+                    meta_description=body.meta_description, author_name=body.author_name or "BrandsLens Team")
+    db.add(post)
+    db.commit()
+    return _blog_post_dict(post)
+
+
+@app.patch("/api/admin/blog/posts/{post_id}")
+def admin_update_blog_post(post_id: str, body: BlogPostBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    post = db.get(BlogPost, post_id)
+    if not post:
+        raise HTTPException(404, "Not found")
+    if len(body.cover_image) > 3_000_000:
+        raise HTTPException(422, "That image is too large — please use a smaller file or an external image URL.")
+    post.title, post.excerpt, post.body_html = body.title.strip(), body.excerpt, body.body_html
+    post.cover_image, post.video_url = body.cover_image, body.video_url
+    post.meta_description, post.author_name = body.meta_description, body.author_name or "BrandsLens Team"
+    post.updated_at = now_utc()
+    db.commit()
+    return _blog_post_dict(post)
+
+
+@app.post("/api/admin/blog/posts/{post_id}/publish")
+def admin_publish_blog_post(post_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    post = db.get(BlogPost, post_id)
+    if not post:
+        raise HTTPException(404, "Not found")
+    post.status = "published"
+    if not post.published_at:
+        post.published_at = now_utc()
+    db.commit()
+    return _blog_post_dict(post)
+
+
+@app.post("/api/admin/blog/posts/{post_id}/unpublish")
+def admin_unpublish_blog_post(post_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    post = db.get(BlogPost, post_id)
+    if not post:
+        raise HTTPException(404, "Not found")
+    post.status = "draft"
+    db.commit()
+    return _blog_post_dict(post)
+
+
+@app.delete("/api/admin/blog/posts/{post_id}")
+def admin_delete_blog_post(post_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    post = db.get(BlogPost, post_id)
+    if not post:
+        raise HTTPException(404, "Not found")
+    db.delete(post)
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/health")
