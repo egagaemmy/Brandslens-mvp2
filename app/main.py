@@ -1059,17 +1059,10 @@ def export_newsletter_csv(member: OrgMember = Depends(active_member), db: Sessio
                     headers={"Content-Disposition": 'attachment; filename="brandslens-newsletter-subscribers.csv"'})
 
 
-def _render_legal_page(md_filename: str, title: str) -> str:
-    import markdown, os
-    path = os.path.join(os.path.dirname(__file__), "..", "legal", md_filename)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            body_html = markdown.markdown(f.read(), extensions=["extra"])
-    except FileNotFoundError:
-        log.error("Legal document missing at %s — the legal/ folder likely didn't make it into this deploy", path)
-        body_html = (f"<p>This document isn't available right now — it looks like a file is missing from "
-                    f"this deployment. If you're the site owner, confirm the <code>legal/</code> folder "
-                    f"(containing {md_filename}) was included when this was last deployed.</p>")
+def _render_legal_page(markdown_text: str, title: str) -> str:
+    import markdown
+    body_html = markdown.markdown(markdown_text, extensions=["extra"])
+    home_link = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else "https://brandslens.app"
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — BrandsLens</title>
@@ -1082,19 +1075,21 @@ a{{color:#D97706}}
 .back{{display:inline-block;margin-bottom:24px;color:#475569;text-decoration:none;font-size:14px}}
 table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #E2E8F0;padding:8px 12px;text-align:left}}
 </style></head><body>
-<a class="back" href="/">&larr; Back to BrandsLens</a>
+<a class="back" href="{home_link}">&larr; Back to BrandsLens</a>
 {body_html}
 </body></html>"""
 
 
 @app.get("/legal/terms", response_class=HTMLResponse)
 def legal_terms() -> str:
-    return _render_legal_page("TERMS_OF_SERVICE.md", "Terms of Service")
+    from .legal_content import TERMS_OF_SERVICE
+    return _render_legal_page(TERMS_OF_SERVICE, "Terms of Service")
 
 
 @app.get("/legal/privacy", response_class=HTMLResponse)
 def legal_privacy() -> str:
-    return _render_legal_page("PRIVACY_POLICY.md", "Privacy Policy")
+    from .legal_content import PRIVACY_POLICY
+    return _render_legal_page(PRIVACY_POLICY, "Privacy Policy")
 
 
 # ==================================================================
@@ -1106,6 +1101,7 @@ def legal_privacy() -> str:
 def _blog_page_wrapper(title: str, meta_description: str, canonical_path: str, body: str,
                        og_image: str = "") -> str:
     og_image_tag = f'<meta property="og:image" content="{og_image}">' if og_image else ""
+    home_link = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else "https://brandslens.app"
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
@@ -1143,7 +1139,7 @@ h1{{font-size:34px;color:#0F172A;line-height:1.25;margin-bottom:8px}}
 video-embed{{aspect-ratio:16/9;width:100%;display:block;border-radius:10px;margin-bottom:28px;border:none}}
 </style>
 </head><body>
-<div class="topbar"><a href="/">Brands<span class="lens">Lens</span></a></div>
+<div class="topbar"><a href="{home_link}">Brands<span class="lens">Lens</span></a></div>
 <div class="wrap">{body}</div>
 </body></html>"""
 

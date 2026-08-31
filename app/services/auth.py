@@ -17,6 +17,29 @@ INVITE_TTL_HOURS = 72
 RESET_TTL_HOURS = 2
 SESSION_TTL_DAYS = 30
 PLAN_WORKSPACE_LIMIT = {"standard": 1, "growth": 5, "professional": 10, "enterprise": 999}
+
+# Sensible starter RSS feeds for a new workspace — a mix of major Nigerian
+# outlets and international sources with strong Africa coverage, so a new
+# customer sees real signal on day one instead of an empty list they have
+# to populate by hand. These are well-known, conventionally-structured feed
+# URLs based on each outlet's standard pattern; RSS endpoints do sometimes
+# change or get discontinued, so this list is worth spot-checking against
+# the live sites periodically rather than treated as permanently correct.
+DEFAULT_RSS_FEEDS = [
+    # Nigerian outlets
+    "https://punchng.com/feed/",
+    "https://www.vanguardngr.com/feed/",
+    "https://guardian.ng/feed/",
+    "https://www.premiumtimesng.com/feed/",
+    "https://dailytrust.com/feed/",
+    "https://www.thisdaylive.com/index.php/feed/",
+    "https://businessday.ng/feed/",
+    "https://nairametrics.com/feed/",
+    "https://techcabal.com/feed/",
+    # International, with strong Africa coverage
+    "http://feeds.bbci.co.uk/news/world/africa/rss.xml",
+    "https://www.aljazeera.com/xml/rss/all.xml",
+]
 PLAN_KEYWORD_LIMIT = {"standard": 25, "growth": 999, "professional": 999, "enterprise": 999}
 PLAN_MEMBER_LIMIT = {"standard": 3, "growth": 10, "professional": 25, "enterprise": 999}
 # Historical search reach, in days. 0 means the feature isn't available at
@@ -86,7 +109,8 @@ def signup(db: Session, company: str, sector: str, plan: str,
     ws = Workspace(organization_id=org.id, name=company, sector=sector, owner_email=email.lower(),
                   brand_tokens=starter_tokens,
                   keywords=[f"{company} scam", f"{company} fraud", f"fake {company}",
-                           f"impersonating {company}", f"{company} refund"])
+                           f"impersonating {company}", f"{company} refund"],
+                  rss_feeds=list(DEFAULT_RSS_FEEDS))
     db.add(ws)
     db.commit()
 
@@ -236,7 +260,8 @@ def add_workspace(db: Session, actor: OrgMember, name: str, sector: str) -> Work
     if len(existing) >= limit:
         raise AuthError(f"Your plan allows up to {limit} workspace(s). Upgrade to add more.")
     ws = Workspace(organization_id=org.id, name=name, sector=sector, owner_email=actor.email,
-                  brand_tokens=[t.strip().lower() for t in name.split() if len(t.strip()) > 2] or [name.lower()])
+                  brand_tokens=[t.strip().lower() for t in name.split() if len(t.strip()) > 2] or [name.lower()],
+                  rss_feeds=list(DEFAULT_RSS_FEEDS))
     db.add(ws)
     db.commit()
     return ws
