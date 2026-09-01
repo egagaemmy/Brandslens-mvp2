@@ -925,6 +925,35 @@ def setup_sync_schema(secret: str, db: Session = Depends(get_db)) -> dict:
                      "Schema was already up to date — nothing needed adding."}
 
 
+@app.get("/api/setup/backfill-rss-feeds")
+def setup_backfill_rss_feeds(secret: str, db: Session = Depends(get_db)) -> dict:
+    """Temporary, one-time-use route — the default RSS feed list only ever
+    gets applied at workspace CREATION time (see auth.signup() and
+    auth.add_workspace()), so any workspace created before that feature
+    existed never received it and never will on its own. This backfills
+    every existing workspace, adding only whichever of the default feeds
+    it doesn't already have — anything a workspace's own team has since
+    added or deliberately removed is left completely untouched. Safe to
+    call more than once: a workspace that already has all the defaults
+    is a no-op. Protected by the same ADMIN_SETUP_SECRET pattern as the
+    other setup routes."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+
+    updated = []
+    workspaces = db.scalars(select(Workspace)).all()
+    for ws in workspaces:
+        current = set(ws.rss_feeds or [])
+        missing = [f for f in auth.DEFAULT_RSS_FEEDS if f not in current]
+        if missing:
+            ws.rss_feeds = list(ws.rss_feeds or []) + missing
+            updated.append({"workspace": ws.name, "feeds_added": len(missing)})
+    db.commit()
+    return {"ok": True, "workspaces_updated": updated,
+           "message": f"Backfilled {len(updated)} workspace(s)." if updated else
+                     "Every workspace already had the full default feed list — nothing needed adding."}
+
+
 @app.get("/api/setup/seed-blog")
 def setup_seed_blog(secret: str, db: Session = Depends(get_db)) -> dict:
     """Temporary, one-time-use route — publishes the four launch blog posts
