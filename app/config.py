@@ -9,6 +9,12 @@ def env(key: str, default: str = "") -> str:
 APP_NAME = "BrandsLens"
 TIMEZONE = env("TZ", "Africa/Lagos")
 FRONTEND_ORIGIN = env("FRONTEND_ORIGIN", "*")
+# The blog's own canonical address — a dedicated subdomain of the real
+# domain, since the blog is served by this backend directly, not by the
+# marketing site (Vercel) or the app (Cloudflare Pages). Used for
+# canonical/OG tags and social share links, which all need the blog's
+# own real, public URL — not the marketing site's.
+BLOG_URL = env("BLOG_URL", "https://blog.brandslens.com")
 
 # --- Claude (classification + statement drafting) — the one API this needs ---
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")

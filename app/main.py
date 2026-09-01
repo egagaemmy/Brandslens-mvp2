@@ -12,13 +12,13 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, HTMLResponse
+from fastapi.responses import Response, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session
 
 from .db import get_db, init_db
-from .config import FRONTEND_ORIGIN, APP_NAME, ADMIN_SETUP_SECRET
+from .config import FRONTEND_ORIGIN, BLOG_URL, APP_NAME, ADMIN_SETUP_SECRET
 from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
@@ -1147,17 +1147,21 @@ def export_newsletter_csv(member: OrgMember = Depends(active_member), db: Sessio
 def _render_legal_page(markdown_text: str, title: str) -> str:
     import markdown
     body_html = markdown.markdown(markdown_text, extensions=["extra"])
-    home_link = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else "https://brandslens.app"
+    home_link = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else "https://brandslens.com"
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — BrandsLens</title>
+<link rel="icon" href="{home_link}/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-body{{font-family:-apple-system,Inter,Arial,sans-serif;max-width:760px;margin:0 auto;padding:48px 24px 80px;
+body{{font-family:'Inter',-apple-system,Arial,sans-serif;max-width:760px;margin:0 auto;padding:48px 24px 80px;
      color:#1F2937;line-height:1.7;background:#F8FAFC}}
-h1,h2,h3{{color:#0F172A}}
-h1{{font-size:28px}} h2{{font-size:20px;margin-top:34px}} h3{{font-size:16px}}
+h1,h2,h3{{color:#0F172A;font-family:'Instrument Serif',Georgia,serif;font-weight:400}}
+h1{{font-size:32px}} h2{{font-size:22px;margin-top:34px}} h3{{font-size:17px}}
 a{{color:#D97706}}
-.back{{display:inline-block;margin-bottom:24px;color:#475569;text-decoration:none;font-size:14px}}
+.back{{display:inline-block;margin-bottom:24px;color:#475569;text-decoration:none;font-size:14px;transition:color .15s}}
+.back:hover{{color:#D97706}}
 table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #E2E8F0;padding:8px 12px;text-align:left}}
 </style></head><body>
 <a class="back" href="{home_link}">&larr; Back to BrandsLens</a>
@@ -1186,39 +1190,45 @@ def legal_privacy() -> str:
 def _blog_page_wrapper(title: str, meta_description: str, canonical_path: str, body: str,
                        og_image: str = "") -> str:
     og_image_tag = f'<meta property="og:image" content="{og_image}">' if og_image else ""
-    home_link = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else "https://brandslens.app"
+    home_link = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else "https://brandslens.com"
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
 <meta name="description" content="{meta_description}">
-<link rel="canonical" href="https://brandslens.app{canonical_path}">
+<link rel="canonical" href="{BLOG_URL}{canonical_path}">
+<link rel="icon" href="{home_link}/favicon.ico">
 <meta property="og:type" content="article">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{meta_description}">
-<meta property="og:url" content="https://brandslens.app{canonical_path}">
+<meta property="og:url" content="{BLOG_URL}{canonical_path}">
 {og_image_tag}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-body{{font-family:-apple-system,Inter,Arial,sans-serif;margin:0;color:#1F2937;background:#F8FAFC}}
+body{{font-family:'Inter',-apple-system,Arial,sans-serif;margin:0;color:#1F2937;background:#F8FAFC}}
 .wrap{{max-width:760px;margin:0 auto;padding:0 20px 80px}}
 .topbar{{background:#0B0F17;padding:18px 20px;margin-bottom:40px}}
-.topbar a{{color:#fff;text-decoration:none;font-weight:700;font-size:17px}}
-.topbar .lens{{color:#D97706}}
-h1{{font-size:34px;color:#0F172A;line-height:1.25;margin-bottom:8px}}
+.topbar a{{color:#fff;text-decoration:none;font-weight:700;font-size:17px;font-family:'Instrument Serif',Georgia,serif;transition:opacity .15s}}
+.topbar a:hover{{opacity:.8}}
+.topbar .lens{{color:#D97706;font-style:italic}}
+h1{{font-family:'Instrument Serif',Georgia,serif;font-size:36px;font-weight:400;color:#0F172A;line-height:1.25;margin-bottom:8px}}
 .meta{{color:#64748B;font-size:13.5px;margin-bottom:28px}}
 .cover{{width:100%;border-radius:12px;margin-bottom:28px;display:block}}
 .body-content{{font-size:16.5px;line-height:1.8}}
-.body-content h2{{font-size:23px;margin-top:38px;color:#0F172A}}
-.body-content h3{{font-size:18px;margin-top:28px;color:#0F172A}}
+.body-content h2{{font-family:'Instrument Serif',Georgia,serif;font-weight:400;font-size:26px;margin-top:38px;color:#0F172A}}
+.body-content h3{{font-family:'Instrument Serif',Georgia,serif;font-weight:400;font-size:20px;margin-top:28px;color:#0F172A}}
 .body-content p{{margin:16px 0}}
 .body-content img{{max-width:100%;border-radius:8px}}
 .body-content a{{color:#D97706}}
 .body-content ul,.body-content ol{{padding-left:24px}}
 .share-row{{display:flex;gap:12px;margin-top:44px;padding-top:24px;border-top:1px solid #E2E8F0}}
 .share-row a{{display:inline-flex;align-items:center;padding:8px 16px;border-radius:8px;background:#0F172A;
-             color:#fff;text-decoration:none;font-size:13px;font-weight:600}}
+             color:#fff;text-decoration:none;font-size:13px;font-weight:600;transition:background .15s}}
+.share-row a:hover{{background:#D97706}}
 .post-card{{background:#fff;border-radius:14px;padding:22px;margin-bottom:18px;border:1px solid #E5E7EB;
-           text-decoration:none;display:block;color:inherit}}
-.post-card h2{{font-size:21px;color:#0F172A;margin:0 0 8px}}
+           text-decoration:none;display:block;color:inherit;transition:border-color .15s,box-shadow .15s}}
+.post-card:hover{{border-color:#D97706;box-shadow:0 4px 16px rgba(15,23,42,.06)}}
+.post-card h2{{font-family:'Instrument Serif',Georgia,serif;font-weight:400;font-size:23px;color:#0F172A;margin:0 0 8px}}
 .post-card p{{color:#475569;font-size:14.5px;margin:0}}
 .post-card .meta{{margin-bottom:10px;font-size:12.5px}}
 video-embed{{aspect-ratio:16/9;width:100%;display:block;border-radius:10px;margin-bottom:28px;border:none}}
@@ -1227,6 +1237,16 @@ video-embed{{aspect-ratio:16/9;width:100%;display:block;border-radius:10px;margi
 <div class="topbar"><a href="{home_link}">Brands<span class="lens">Lens</span></a></div>
 <div class="wrap">{body}</div>
 </body></html>"""
+
+
+@app.get("/", include_in_schema=False)
+def root_redirect() -> RedirectResponse:
+    """The backend has no real content of its own at its bare root — this
+    exists specifically so that the dedicated blog subdomain (which points
+    directly at this backend) shows the actual blog the moment someone
+    visits it, rather than a raw {"detail": "Not Found"} JSON response.
+    Also improves the raw Render URL for anyone who visits it directly."""
+    return RedirectResponse(url="/blog")
 
 
 @app.get("/blog", response_class=HTMLResponse)
@@ -1253,14 +1273,16 @@ def blog_post(slug: str, db: Session = Depends(get_db)) -> str:
                                   "<h1>Post not found</h1><p>This post may have been unpublished or the link is incorrect. <a href='/blog'>Back to the blog</a>.</p>")
     video_embed = f'<iframe video-embed src="{post.video_url}" allowfullscreen></iframe>' if post.video_url else ""
     cover = f'<img class="cover" src="{post.cover_image}" alt="{post.title}">' if post.cover_image else ""
-    share_url = f"https://brandslens.app/blog/{post.slug}"
+    from urllib.parse import quote
+    share_url = quote(f"{BLOG_URL}/blog/{post.slug}", safe="")
+    share_title = quote(post.title)
     body = f"""<h1>{post.title}</h1>
     <div class="meta">{post.published_at.strftime('%d %B %Y') if post.published_at else ''} · {post.author_name}</div>
     {cover}{video_embed}
     <div class="body-content">{post.body_html}</div>
     <div class="share-row">
       <a href="https://www.linkedin.com/sharing/share-offsite/?url={share_url}" target="_blank" rel="noopener">Share on LinkedIn</a>
-      <a href="https://twitter.com/intent/tweet?url={share_url}&text={post.title}" target="_blank" rel="noopener">Share on X</a>
+      <a href="https://twitter.com/intent/tweet?url={share_url}&text={share_title}" target="_blank" rel="noopener">Share on X</a>
       <a href="https://www.facebook.com/sharer/sharer.php?u={share_url}" target="_blank" rel="noopener">Share on Facebook</a>
     </div>"""
     return _blog_page_wrapper(f"{post.title} — BrandsLens Blog", post.meta_description or post.excerpt,
