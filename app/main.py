@@ -23,7 +23,7 @@ from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention,
-                     EscalationContact, EscalationLog, BlogPost, NewsletterSubscriber, now_utc, aware)
+                     EscalationContact, EscalationLog, ThreatCategory, BlogPost, NewsletterSubscriber, now_utc, aware)
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -538,6 +538,61 @@ def get_audit(case_id: str, member: OrgMember = Depends(active_member), db: Sess
 
 
 # ==================================================================
+# THREAT CATEGORIES — a workspace's own editable list of what counts as
+# relevant to escalate on. Seeded with sensible defaults at creation, but
+# genuinely editable after that: what matters to a fintech (regulator
+# notification) is rarely what matters to an FMCG brand (counterfeit
+# product reports), and neither should be stuck with only the built-in
+# set. This governs what shows up as an escalation-contact category —
+# it's deliberately separate from how an incident gets auto-classified,
+# which keeps working exactly as it always has.
+# ==================================================================
+class ThreatCategoryBody(BaseModel):
+    key: str
+    label: str
+
+
+@app.get("/api/workspaces/{ws_id}/threat-categories")
+def list_threat_categories(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(ThreatCategory).where(ThreatCategory.workspace_id == ws.id)
+                      .order_by(ThreatCategory.created_at)).all()
+    return [{"id": c.id, "key": c.key, "label": c.label} for c in rows]
+
+
+@app.post("/api/workspaces/{ws_id}/threat-categories")
+def add_threat_category(body: ThreatCategoryBody, ws: Workspace = Depends(owned_workspace),
+                        member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    if member.role == "member":
+        raise HTTPException(403, "Only an Owner or Team Lead can edit threat categories.")
+    key = body.key.strip().lower().replace(" ", "_")
+    label = body.label.strip()
+    if not key or not label:
+        raise HTTPException(422, "Both a key and a label are required.")
+    existing = db.scalar(select(ThreatCategory).where(ThreatCategory.workspace_id == ws.id, ThreatCategory.key == key))
+    if existing:
+        raise HTTPException(422, f"A category with key '{key}' already exists for this workspace.")
+    cat = ThreatCategory(workspace_id=ws.id, key=key, label=label)
+    db.add(cat)
+    db.commit()
+    return {"id": cat.id, "key": cat.key, "label": cat.label}
+
+
+@app.delete("/api/workspaces/{ws_id}/threat-categories/{category_id}")
+def remove_threat_category(category_id: str, ws: Workspace = Depends(owned_workspace),
+                           member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    if member.role == "member":
+        raise HTTPException(403, "Only an Owner or Team Lead can edit threat categories.")
+    cat = db.get(ThreatCategory, category_id)
+    if not cat or cat.workspace_id != ws.id:
+        raise HTTPException(404, "That category wasn't found for this workspace.")
+    if cat.key == "general":
+        raise HTTPException(422, "The 'general' category can't be removed — it's the fallback every escalation contact list falls back to.")
+    db.delete(cat)
+    db.commit()
+    return {"ok": True}
+
+
+# ==================================================================
 # ESCALATION CONTACTS — configured by the workspace admin, not the AI.
 # This is what actually lets Media Room tell a team WHO to escalate to.
 # ==================================================================
@@ -560,7 +615,8 @@ def add_escalation_contact(body: EscalationContactBody, ws: Workspace = Depends(
                            member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     if member.role == "member":
         raise HTTPException(403, "Only an Owner or Team Lead can configure escalation contacts.")
-    valid_categories = set(media_room.PLAYBOOKS.keys()) | {"general"}
+    valid_categories = {c.key for c in db.scalars(
+        select(ThreatCategory).where(ThreatCategory.workspace_id == ws.id))} | {"general"}
     if body.category not in valid_categories:
         raise HTTPException(422, f"Category must be one of: {', '.join(sorted(valid_categories))}")
     if not body.name.strip() or not body.email.strip():

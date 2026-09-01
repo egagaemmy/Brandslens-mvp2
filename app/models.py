@@ -322,6 +322,28 @@ class EscalationContact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class ThreatCategory(Base):
+    """A workspace's own editable list of threat categories — seeded with
+    sensible defaults at creation (matching media_room.PLAYBOOKS), but
+    freely added to or removed from after that. What counts as a relevant
+    threat category is genuinely different across sectors — a fintech
+    cares about regulator notification in a way a food brand rarely will,
+    and a food brand may care about counterfeit-product reports in a way
+    nothing built-in anticipates. This table is what makes that a real
+    per-customer choice rather than a fixed list everyone is stuck with.
+    Deliberately independent of media_room._playbook_for()'s own internal
+    classification, which keeps working exactly as it always has — this
+    only governs what shows up as an option for contacts and escalations,
+    not how an incident gets auto-classified in the first place."""
+    __tablename__ = "threat_categories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    key: Mapped[str] = mapped_column(String(40))
+    label: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class EscalationLog(Base):
     """A real, dedicated record of every escalation actually composed and
     sent — who it went to, what template, what it said. Separate from the

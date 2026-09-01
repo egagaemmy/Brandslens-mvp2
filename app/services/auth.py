@@ -26,7 +26,7 @@ PLAN_WORKSPACE_LIMIT = {"standard": 1, "growth": 5, "professional": 10, "enterpr
 # change or get discontinued, so this list is worth spot-checking against
 # the live sites periodically rather than treated as permanently correct.
 DEFAULT_RSS_FEEDS = [
-    # Nigerian outlets
+    # Nigerian outlets (15)
     "https://punchng.com/feed/",
     "https://www.vanguardngr.com/feed/",
     "https://guardian.ng/feed/",
@@ -36,10 +36,43 @@ DEFAULT_RSS_FEEDS = [
     "https://businessday.ng/feed/",
     "https://nairametrics.com/feed/",
     "https://techcabal.com/feed/",
-    # International, with strong Africa coverage
+    "https://leadership.ng/feed/",
+    "https://www.thecable.ng/feed",
+    "https://dailypost.ng/feed/",
+    "https://tribuneonlineng.com/feed/",
+    "http://saharareporters.com/feed",
+    "https://thenationonlineng.net/feed/",
+    # International, with strong Africa coverage (10)
     "http://feeds.bbci.co.uk/news/world/africa/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
+    "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf",
+    "https://www.africanews.com/feed/rss",
+    "https://www.france24.com/en/africa/rss",
+    "https://www.theguardian.com/world/africa/rss",
+    "https://www.cnbcafrica.com/feed/",
+    "http://feeds.bbci.co.uk/news/world/rss.xml",
+    "http://rss.cnn.com/rss/edition_africa.rss",
+    "https://www.devex.com/rss/news",
 ]
+
+# Sensible starter threat categories — matching media_room.PLAYBOOKS exactly,
+# so a freshly created workspace's escalation contacts line up with how
+# incidents actually get classified out of the box. Genuinely editable
+# after this: see the ThreatCategory model's own docstring for why.
+DEFAULT_THREAT_CATEGORIES = [
+    ("fraud", "Fraud / Impersonation Alert"),
+    ("domain", "Look-Alike Domain Takedown"),
+    ("disclosure", "Premature Disclosure Warning"),
+    ("misinfo", "Misinformation Correction"),
+    ("regulator", "Regulator Notification"),
+    ("general", "General Escalation"),
+]
+
+
+def _seed_default_threat_categories(db: Session, ws: "Workspace") -> None:
+    from ..models import ThreatCategory
+    for key, label in DEFAULT_THREAT_CATEGORIES:
+        db.add(ThreatCategory(workspace_id=ws.id, key=key, label=label))
 PLAN_KEYWORD_LIMIT = {"standard": 25, "growth": 999, "professional": 999, "enterprise": 999}
 PLAN_MEMBER_LIMIT = {"standard": 3, "growth": 10, "professional": 25, "enterprise": 999}
 # Historical search reach, in days. 0 means the feature isn't available at
@@ -112,6 +145,8 @@ def signup(db: Session, company: str, sector: str, plan: str,
                            f"impersonating {company}", f"{company} refund"],
                   rss_feeds=list(DEFAULT_RSS_FEEDS))
     db.add(ws)
+    db.flush()
+    _seed_default_threat_categories(db, ws)
     db.commit()
 
     token = issue_session(db, owner)
@@ -263,6 +298,8 @@ def add_workspace(db: Session, actor: OrgMember, name: str, sector: str) -> Work
                   brand_tokens=[t.strip().lower() for t in name.split() if len(t.strip()) > 2] or [name.lower()],
                   rss_feeds=list(DEFAULT_RSS_FEEDS))
     db.add(ws)
+    db.flush()
+    _seed_default_threat_categories(db, ws)
     db.commit()
     return ws
 
