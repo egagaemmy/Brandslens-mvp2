@@ -12,17 +12,9 @@ application depends on the app/ package existing at all.
 """
 
 TERMS_OF_SERVICE = """\
-# BrandsLens — Terms of Service (DRAFT)
+# BrandsLens — Terms of Service
 
-**This is a starting draft, not a finished legal document. Have a qualified
-lawyer licensed in your operating jurisdiction (Nigeria at minimum; wherever
-else you take customers) review and adapt this before it governs any real
-customer relationship or real money.** It is written to be genuinely useful
-as a first pass, not just a placeholder — but software-generated legal text
-is not a substitute for legal advice, especially given this product handles
-fraud allegations, regulatory escalation, and other people's brand data.
-
-*Last updated: [DATE] · Effective: [DATE]*
+*Last updated: 1 September 2026 · Effective: 1 September 2026*
 
 ## 1. Who this agreement is with
 
@@ -56,13 +48,13 @@ instance of fraud.**
 
 ## 4. Subscription, billing, and cancellation
 
-- Plans and pricing are as published at [brandseye.app/pricing] and may
-  change with [30] days' notice for existing subscribers.
-- Subscriptions renew automatically (annually or monthly, as selected) until
-  cancelled. Cancelling stops future renewal; it does not refund the current
-  period unless required by applicable consumer law.
+- Plans and pricing are as published at brandslens.com/pricing and may
+  change with 30 days' notice for existing subscribers.
+- Subscriptions renew automatically (annually, monthly, or daily, as
+  selected) until cancelled. Cancelling stops future renewal; it does not
+  refund the current period unless required by applicable consumer law.
 - On cancellation, your organization's data is retained in a read-only state
-  for [30] days before deletion, so an accidental cancellation can be reversed.
+  for 30 days before deletion, so an accidental cancellation can be reversed.
 - Free trials, where offered, convert to a paid subscription unless
   cancelled before the trial ends — the exact terms will be shown at signup.
 
@@ -116,17 +108,15 @@ for gross negligence or willful misconduct).
 
 ## 11. Termination
 
-Either party may terminate for convenience with [30] days' notice, or
-immediately for material breach that isn't cured within [15] days of notice.
+Either party may terminate for convenience with 30 days' notice, or
+immediately for material breach that isn't cured within 15 days of notice.
 BrandsLens may suspend an account immediately for suspected fraud, non-payment,
 or activity that risks the security or data of other Customers.
 
 ## 12. Governing law and disputes
 
 These Terms are governed by the laws of the Federal Republic of Nigeria,
-without regard to conflict-of-laws principles, unless the lawyer reviewing
-this document for a specific Customer segment advises otherwise (e.g., for a
-predominantly EU or US customer base).
+without regard to conflict-of-laws principles.
 
 ## 13. Changes to these Terms
 
@@ -136,35 +126,13 @@ Owners with reasonable notice before taking effect.
 ## 14. Contact
 
 BrandsLens Limited
-[Registered address]
-[Support email]
-
----
-
-### Notes for your lawyer (delete before publishing)
-
-- Confirm the correct legal entity and registration details once
-  incorporated (CAC registration referenced in the go-live checklist).
-- Section 10's liability cap should be reviewed against your actual
-  insurance coverage and risk tolerance, especially given the Media Room's
-  regulator-notification feature — consider whether a specific carve-out or
-  additional disclaimer is warranted there.
-- Section 12's governing law choice should reflect where your actual
-  customer base is concentrated; revisit if you expand beyond Nigeria.
-- Confirm consumer protection law requirements for the cancellation/refund
-  language in Section 4 for each jurisdiction you sell into.
+Email: info@brandslens.com
 """
 
 PRIVACY_POLICY = """\
-# BrandsLens — Privacy Policy (DRAFT)
+# BrandsLens — Privacy Policy
 
-**Same caveat as the Terms of Service: this is a working draft to review with
-a qualified lawyer before it governs real customer or personal data,
-particularly given BrandsLens processes both your team's account data and
-third-party mention data that may include other people's names, opinions,
-and social media activity.**
-
-*Last updated: [DATE] · Effective: [DATE]*
+*Last updated: 1 September 2026 · Effective: 1 September 2026*
 
 ## 1. What this policy covers
 
@@ -215,10 +183,10 @@ BrandsLens independently gathered.
 
 ## 5. Who we share data with
 
-- **Sub-processors**: hosting provider, Anthropic (for AI classification —
-  mention text is sent for analysis; account passwords and payment details
+- **Sub-processors**: our hosting providers, Anthropic (for AI classification
+  — mention text is sent for analysis; account passwords and payment details
   are never sent to this or any AI provider), Stripe/Paystack (billing),
-  email delivery provider (invites and notifications).
+  and our email delivery provider (invites and notifications).
 - We do not sell personal data. We do not share mention data with any party
   other than the Customer whose brand it concerns, except as required by law
   or a valid regulatory/court order.
@@ -233,13 +201,11 @@ BrandsLens independently gathered.
 
 ## 7. Your rights
 
-Depending on your jurisdiction (this section should be adapted per
-jurisdiction by your lawyer — NDPA rights for Nigerian data subjects, GDPR
-rights if you have EU-based customers or process EU residents' data), you
-may have the right to: access the personal data we hold about you; correct
-inaccurate data; request deletion; object to or restrict certain processing;
-and receive your data in a portable format. Contact [PRIVACY EMAIL] to
-exercise any of these rights.
+Depending on your jurisdiction, you may have the right to: access the
+personal data we hold about you; correct inaccurate data; request deletion;
+object to or restrict certain processing; and receive your data in a
+portable format. Contact info@brandslens.com to exercise any of these
+rights.
 
 **A note on third-party mention data**: if you are the author of a public
 post that has been captured as a mention within a Customer's BrandsLens
@@ -276,27 +242,5 @@ reasonable notice before they take effect.
 ## 12. Contact
 
 BrandsLens Limited
-Data Protection contact: [PRIVACY EMAIL]
-[Registered address]
-
----
-
-### Notes for your lawyer (delete before publishing)
-
-- Confirm whether you need to register with Nigeria's Data Protection
-  Commission (NDPC) as a data controller/processor under the NDPA 2023, and
-  whether the scale of mention-data collection triggers any additional
-  compliance obligations (e.g., a Data Protection Impact Assessment).
-- If any customers or the personal data of any mention subjects are EU-based,
-  confirm whether GDPR applies and whether a Data Processing Agreement
-  template is needed for Customers (since Customers act somewhat like
-  controllers of their own workspace's mention data, with BrandsLens as
-  processor — this controller/processor relationship should be reviewed and
-  formalized in a DPA, not just this policy).
-- Section 3's framing of mention data collection (legitimate interest,
-  public-data-only) is the standard approach used by social listening tools
-  generally, but should be validated against current NDPA/GDPR guidance
-  before this goes live, particularly regarding the boundary between
-  "publicly available" and any content gathered via Telegram channel
-  monitoring, which sits in a greyer area than open web/social scraping.
+Data Protection contact: info@brandslens.com
 """

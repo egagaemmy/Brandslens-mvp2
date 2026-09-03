@@ -1111,7 +1111,11 @@ def newsletter_subscribe(body: NewsletterSubscribeBody, db: Session = Depends(ge
     sub = NewsletterSubscriber(email=email, source=body.source)
     db.add(sub)
     db.commit()
-    if NEWSLETTER_WEBHOOK_URL:
+    from .services.mailer import add_to_mailchimp
+    from .config import MAILCHIMP_API_KEY
+    if MAILCHIMP_API_KEY:
+        add_to_mailchimp(email)
+    elif NEWSLETTER_WEBHOOK_URL:
         try:
             httpx.post(NEWSLETTER_WEBHOOK_URL, json={"email": email, "source": body.source}, timeout=8)
         except Exception:  # noqa: BLE001 — the subscriber is already safely stored regardless

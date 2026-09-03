@@ -42,8 +42,17 @@ RESEND_API_KEY = env("RESEND_API_KEY")
 # relay URL here. Leave unset and signups still land safely in our own
 # database; nothing is ever lost either way.
 NEWSLETTER_WEBHOOK_URL = env("NEWSLETTER_WEBHOOK_URL")
+# Mailchimp needs real authentication and its own specific request format —
+# a generic webhook POST alone was never going to work against Mailchimp's
+# actual API. If these three are set, they take priority over the generic
+# webhook above. All three come from your Mailchimp account: the API key
+# from Account > Extras > API keys (its suffix, e.g. "-us21", is the
+# server prefix), and the list/audience ID from Audience > Settings.
+MAILCHIMP_API_KEY = env("MAILCHIMP_API_KEY")
+MAILCHIMP_SERVER_PREFIX = env("MAILCHIMP_SERVER_PREFIX")
+MAILCHIMP_LIST_ID = env("MAILCHIMP_LIST_ID")
 ADMIN_SETUP_SECRET = env("ADMIN_SETUP_SECRET")  # temporary — protects the one-time /api/setup/create-admin route
-MAIL_FROM = env("MAIL_FROM", "watch@brandslens.app")
+MAIL_FROM = env("MAIL_FROM", "watch@mail.brandslens.com")
 ENTERPRISE_INQUIRY_EMAIL = env("ENTERPRISE_INQUIRY_EMAIL", "kgrnigeria@gmail.com")
 SLACK_WEBHOOK_DEFAULT = env("SLACK_WEBHOOK_DEFAULT")
 

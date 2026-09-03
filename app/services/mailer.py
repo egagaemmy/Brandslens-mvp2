@@ -3,11 +3,33 @@ anything that needs to land in someone's inbox (trial reminders, payment
 issues) — both fail silently (log + return False) if unconfigured, so a
 missing API key never breaks the rest of the app."""
 import logging
+import hashlib
 import httpx
-from ..config import SLACK_WEBHOOK_DEFAULT, RESEND_API_KEY, MAIL_FROM
+from ..config import SLACK_WEBHOOK_DEFAULT, RESEND_API_KEY, MAIL_FROM, MAILCHIMP_API_KEY, MAILCHIMP_SERVER_PREFIX, MAILCHIMP_LIST_ID
 from ..branding import BRAND
 
 log = logging.getLogger("mailer")
+
+def add_to_mailchimp(email: str) -> bool:
+    """Mailchimp needs real authentication and its own request shape — a
+    generic webhook was never going to satisfy that. Uses the documented
+    upsert pattern (PUT to a hash of the lowercased email) so a repeat
+    signup updates rather than errors, and status_if_new (not status)
+    specifically to avoid ever silently re-subscribing someone who
+    unsubscribed on Mailchimp's own side previously."""
+    if not (MAILCHIMP_API_KEY and MAILCHIMP_SERVER_PREFIX and MAILCHIMP_LIST_ID):
+        log.info("Mailchimp not configured — newsletter forward suppressed for %s", email)
+        return False
+    subscriber_hash = hashlib.md5(email.lower().encode()).hexdigest()
+    url = f"https://{MAILCHIMP_SERVER_PREFIX}.api.mailchimp.com/3.0/lists/{MAILCHIMP_LIST_ID}/members/{subscriber_hash}"
+    try:
+        httpx.put(url, auth=("anystring", MAILCHIMP_API_KEY),
+                 json={"email_address": email, "status_if_new": "subscribed"}, timeout=10).raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001 — the subscriber is already safely stored in our own database regardless
+        log.exception("Mailchimp forward failed for %s", email)
+        return False
+
 
 def slack_alert(text: str, webhook: str = "") -> bool:
     hook = webhook or SLACK_WEBHOOK_DEFAULT
