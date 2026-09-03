@@ -8,6 +8,9 @@ hash covers the previous row's hash, so tampering with history is provable at
 read time (see verify_chain), not just a policy nobody checks.
 """
 from __future__ import annotations
+import logging
+
+log = logging.getLogger("media_room")
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -176,18 +179,24 @@ def draft_statement_ai(brand_name: str, incident_summary: str, template_type: st
     """Optional AI-assisted draft via Claude. Deliberately constrained: drafts
     only, never claims resolution or fault, always flags for human review."""
     from ..config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL
+    fallback = (f"[Draft — AI assist unavailable right now, please write manually]\n\n"
+               f"Regarding: {incident_summary}\n\nRecommended position: acknowledge awareness, "
+               f"avoid confirming unverified details, commit to a follow-up within 24 hours.")
     if not ANTHROPIC_API_KEY:
-        return (f"[Draft — Claude not configured, write manually]\n\n"
-                f"Regarding: {incident_summary}\n\nRecommended position: acknowledge awareness, "
-                f"avoid confirming unverified details, commit to a follow-up within 24 hours.")
-    from anthropic import Anthropic
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
-    system = ("You draft crisis and regulatory communications. Draft ONLY — never state a matter "
-             "is resolved, never admit fault, never make legal claims. Always leave a placeholder "
-             "for legal/compliance review. Be factual and calm, no speculation about unverified details.")
-    resp = client.messages.create(
-        model=CLASSIFIER_MODEL, max_tokens=500, system=system,
-        messages=[{"role": "user", "content":
-            f"Brand: {brand_name}\nTemplate: {template_type}\nIncident: {incident_summary}\n\nDraft the statement."}],
-    )
-    return "".join(b.text for b in resp.content if b.type == "text")
+        return fallback
+    try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        system = ("You draft crisis and regulatory communications. Draft ONLY — never state a matter "
+                 "is resolved, never admit fault, never make legal claims. Always leave a placeholder "
+                 "for legal/compliance review. Be factual and calm, no speculation about unverified details.")
+        resp = client.messages.create(
+            model=CLASSIFIER_MODEL, max_tokens=500, system=system,
+            messages=[{"role": "user", "content":
+                f"Brand: {brand_name}\nTemplate: {template_type}\nIncident: {incident_summary}\n\nDraft the statement."}],
+        )
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        return text or fallback
+    except Exception:  # noqa: BLE001 — a template the user can still edit beats a broken button
+        log.exception("AI draft generation failed — falling back to the template")
+        return fallback

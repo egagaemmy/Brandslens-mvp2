@@ -517,14 +517,23 @@ def draft_statement_route(case_id: str, body: DraftBody, member: OrgMember = Dep
 
 
 class AiDraftBody(BaseModel):
-    brand_name: str
-    incident_summary: str
-    template_type: str = "fraud"
+    case_id: str
 
 
 @app.post("/api/media-room/ai-draft")
-def ai_draft(body: AiDraftBody, member: OrgMember = Depends(active_member)) -> dict:
-    return {"draft": media_room.draft_statement_ai(body.brand_name, body.incident_summary, body.template_type)}
+def ai_draft(body: AiDraftBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    case = _case_in_org(body.case_id, member, db)
+    ws = db.get(Workspace, case.workspace_id)
+    org = db.get(Organization, member.organization_id)
+    incident = db.get(Incident, case.incident_id) if case.incident_id else None
+    if incident:
+        summary = (f"{case.severity} severity mention on {incident.platform}: \"{incident.title}\". "
+                  f"{incident.rationale}" if incident.rationale else
+                  f"{case.severity} severity mention on {incident.platform}: \"{incident.title}\".")
+    else:
+        summary = f"{case.severity} severity mention requiring a response."
+    template_type = case.playbook_key or "general"
+    return {"draft": media_room.draft_statement_ai(ws.name if ws else org.name, summary, template_type)}
 
 
 @app.get("/api/media-room/cases/{case_id}/audit")
