@@ -18,11 +18,31 @@ from .mailer import slack_alert
 log = logging.getLogger("pipeline")
 
 
-def _keyword_prefilter(ws: Workspace, text: str) -> bool:
+def _matching_keywords(ws: Workspace, text: str) -> list[str]:
+    """Returns every one of the workspace's own configured keywords (plus
+    the brand name itself, as "<brand name>") that genuinely appears in
+    this text — deliberately NOT brand_tokens; see the note below. An empty
+    list means this mention doesn't survive the prefilter at all."""
     lower = text.lower()
+    matched = []
     if ws.name.lower() in lower:
-        return True
-    return any(t.lower() in lower for t in (ws.brand_tokens or []) + (ws.keywords or []))
+        matched.append(ws.name)
+    for kw in (ws.keywords or []):
+        if kw.lower() in lower:
+            matched.append(kw)
+    return matched
+
+
+def _keyword_prefilter(ws: Workspace, text: str) -> bool:
+    """Matches the full brand name, or one of the workspace's own explicitly
+    configured keywords — deliberately NOT brand_tokens. Those are individual
+    word fragments of the company name (e.g. "Kabod Global Resources" splits
+    into "kabod", "global", "resources"), useful for spotting a look-alike
+    domain containing one of them, but far too loose for filtering general
+    content: "global" or "resources" alone would match huge numbers of
+    completely unrelated articles. A mention should only survive here if it
+    genuinely names the brand, or matches a keyword the user chose on purpose."""
+    return bool(_matching_keywords(ws, text))
 
 
 def search_terms(ws: Workspace, limit: int = 12) -> list[str]:
@@ -49,7 +69,9 @@ def _next_ref(db: Session, ws: Workspace) -> str:
 
 def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source: str, found_historically: bool = False) -> dict:
     """candidates: [{"text","url","author","platform","posted_at"(datetime|None),"reach"}]"""
-    survivors = [c for c in candidates if _keyword_prefilter(ws, c["text"])]
+    survivors_with_keywords = [(c, _matching_keywords(ws, c["text"])) for c in candidates]
+    survivors_with_keywords = [(c, kws) for c, kws in survivors_with_keywords if kws]
+    survivors = [c for c, _ in survivors_with_keywords]
     if not survivors:
         return {"candidates": len(candidates), "new": 0, "high": 0, "merged": 0}
 
@@ -87,6 +109,7 @@ def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source
             reach=int(cand.get("reach") or 0), content_hash=chash, source=source,
             posted_at=cand.get("posted_at") or datetime.now(timezone.utc),
             found_historically=found_historically,
+            matched_keywords=survivors_with_keywords[i][1],
         )
         db.add(inc)
         db.flush()

@@ -248,12 +248,29 @@ def _apply_date_filter(query, range_key: str | None, start: str | None, end: str
     return query
 
 
+def _apply_keyword_filter(incidents: list[Incident], keywords_param: str | None) -> list[Incident]:
+    """keywords_param is a comma-separated list from the query string (e.g.
+    "?keywords=Kabod%20Global%20Resources%20scam,fraud"). Filtered in Python
+    rather than in SQL — matched_keywords is a JSON column, and querying JSON
+    containment portably across SQLite (used in tests) and Postgres
+    (production) is more trouble than it's worth for what's already a
+    bounded, per-workspace list. No keywords_param means no filtering at all."""
+    if not keywords_param:
+        return incidents
+    wanted = {k.strip().lower() for k in keywords_param.split(",") if k.strip()}
+    if not wanted:
+        return incidents
+    return [i for i in incidents if wanted & {k.lower() for k in (i.matched_keywords or [])}]
+
+
 @app.get("/api/workspaces/{ws_id}")
 def get_workspace(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
-                  range: str | None = None, start: str | None = None, end: str | None = None) -> dict:
+                  range: str | None = None, start: str | None = None, end: str | None = None,
+                  keywords: str | None = None) -> dict:
     q = select(Incident).where(Incident.workspace_id == ws.id)
     q = _apply_date_filter(q, range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(200)).all()
+    incidents = _apply_keyword_filter(incidents, keywords)
     return {"id": ws.id, "name": ws.name, "sector": ws.sector,
            "brand_tokens": ws.brand_tokens, "keywords": ws.keywords, "rss_feeds": ws.rss_feeds,
            "brand_domains": ws.brand_domains, "telegram_channels": ws.telegram_channels,
@@ -296,7 +313,7 @@ def _inc_dict(i: Incident) -> dict:
             "platform": i.platform, "lang": i.lang, "sev": i.severity, "sev_overridden": i.severity_overridden,
             "sentiment": i.sentiment, "tags": i.tags, "rationale": i.rationale, "status": i.status,
             "reach": i.reach, "posted": i.posted_at.isoformat() if i.posted_at else None, "source": i.source,
-            "found_historically": i.found_historically}
+            "found_historically": i.found_historically, "matched_keywords": i.matched_keywords or []}
 
 
 class StatusBody(BaseModel):
@@ -1461,10 +1478,11 @@ def _get_competitor_rows(ws: Workspace, db: Session) -> list[dict] | None:
 @app.get("/api/reports/pdf")
 def report_pdf(ws: Workspace = Depends(owned_workspace), member: OrgMember = Depends(active_member),
                db: Session = Depends(get_db), range: str | None = None, start: str | None = None,
-               end: str | None = None) -> Response:
+               end: str | None = None, keywords: str | None = None) -> Response:
     _require_report_format(member, db, "pdf")
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
+    incidents = _apply_keyword_filter(incidents, keywords)
     comp_rows = _get_competitor_rows(ws, db)
     pdf_bytes = report_generator.generate_pdf_report(ws, incidents, comp_rows)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pdf"
@@ -1475,10 +1493,11 @@ def report_pdf(ws: Workspace = Depends(owned_workspace), member: OrgMember = Dep
 @app.get("/api/reports/pptx")
 def report_pptx(ws: Workspace = Depends(owned_workspace), member: OrgMember = Depends(active_member),
                 db: Session = Depends(get_db), range: str | None = None, start: str | None = None,
-                end: str | None = None) -> Response:
+                end: str | None = None, keywords: str | None = None) -> Response:
     _require_report_format(member, db, "pptx")
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
+    incidents = _apply_keyword_filter(incidents, keywords)
     comp_rows = _get_competitor_rows(ws, db)
     pptx_bytes = report_generator.generate_pptx_report(ws, incidents, comp_rows)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pptx"
@@ -1489,10 +1508,12 @@ def report_pptx(ws: Workspace = Depends(owned_workspace), member: OrgMember = De
 
 @app.get("/api/reports/excel")
 def report_excel(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db),
-                 range: str | None = None, start: str | None = None, end: str | None = None) -> Response:
+                 range: str | None = None, start: str | None = None, end: str | None = None,
+                 keywords: str | None = None) -> Response:
     # Excel is available on every tier, including Standard — no gating here.
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(2000)).all()
+    incidents = _apply_keyword_filter(incidents, keywords)
     comp_rows = _get_competitor_rows(ws, db)
     xlsx_bytes = report_generator.generate_excel_export(ws, incidents, comp_rows)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-export.xlsx"

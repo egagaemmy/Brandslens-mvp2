@@ -191,6 +191,7 @@ class Incident(Base):
     sentiment: Mapped[str] = mapped_column(String(12), default="")
     tags: Mapped[list] = mapped_column(JSON, default=list)              # FRAUD, DOMAIN RISK, DISCLOSURE RISK, STRATEGIC
     rationale: Mapped[str] = mapped_column(Text, default="")
+    matched_keywords: Mapped[list] = mapped_column(JSON, default=list)  # which of the workspace's own keywords (or its name) actually matched this mention
     status: Mapped[str] = mapped_column(String(16), default="open")
     reach: Mapped[int] = mapped_column(BigInteger, default=0)
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
