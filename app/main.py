@@ -1116,6 +1116,7 @@ def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
 
 class NewsletterSubscribeBody(BaseModel):
     email: str
+    name: str = ""
     source: str = "website"
 
 
@@ -1134,16 +1135,17 @@ def newsletter_subscribe(body: NewsletterSubscribeBody, db: Session = Depends(ge
     existing = db.scalar(select(NewsletterSubscriber).where(NewsletterSubscriber.email == email))
     if existing:
         return {"ok": True, "already_subscribed": True}
-    sub = NewsletterSubscriber(email=email, source=body.source)
+    name = body.name.strip()
+    sub = NewsletterSubscriber(email=email, name=name, source=body.source)
     db.add(sub)
     db.commit()
     from .services.mailer import add_to_mailchimp
     from .config import MAILCHIMP_API_KEY
     if MAILCHIMP_API_KEY:
-        add_to_mailchimp(email)
+        add_to_mailchimp(email, name)
     elif NEWSLETTER_WEBHOOK_URL:
         try:
-            httpx.post(NEWSLETTER_WEBHOOK_URL, json={"email": email, "source": body.source}, timeout=8)
+            httpx.post(NEWSLETTER_WEBHOOK_URL, json={"email": email, "name": name, "source": body.source}, timeout=8)
         except Exception:  # noqa: BLE001 — the subscriber is already safely stored regardless
             log.warning("Newsletter webhook forward failed for a new signup — subscriber is still saved locally")
     return {"ok": True, "already_subscribed": False}

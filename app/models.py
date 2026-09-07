@@ -377,6 +377,7 @@ class NewsletterSubscriber(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
     subscribed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     source: Mapped[str] = mapped_column(String(60), default="website")
     forwarded_ok: Mapped[bool] = mapped_column(Boolean, default=False)

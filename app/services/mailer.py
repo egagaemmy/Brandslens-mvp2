@@ -10,21 +10,25 @@ from ..branding import BRAND
 
 log = logging.getLogger("mailer")
 
-def add_to_mailchimp(email: str) -> bool:
+def add_to_mailchimp(email: str, name: str = "") -> bool:
     """Mailchimp needs real authentication and its own request shape — a
     generic webhook was never going to satisfy that. Uses the documented
     upsert pattern (PUT to a hash of the lowercased email) so a repeat
     signup updates rather than errors, and status_if_new (not status)
     specifically to avoid ever silently re-subscribing someone who
-    unsubscribed on Mailchimp's own side previously."""
+    unsubscribed on Mailchimp's own side previously. name (if given) is
+    passed as the FNAME merge field, so campaigns — like the welcome
+    email — can greet the subscriber by name."""
     if not (MAILCHIMP_API_KEY and MAILCHIMP_SERVER_PREFIX and MAILCHIMP_LIST_ID):
         log.info("Mailchimp not configured — newsletter forward suppressed for %s", email)
         return False
     subscriber_hash = hashlib.md5(email.lower().encode()).hexdigest()
     url = f"https://{MAILCHIMP_SERVER_PREFIX}.api.mailchimp.com/3.0/lists/{MAILCHIMP_LIST_ID}/members/{subscriber_hash}"
+    payload = {"email_address": email, "status_if_new": "subscribed"}
+    if name:
+        payload["merge_fields"] = {"FNAME": name}
     try:
-        httpx.put(url, auth=("anystring", MAILCHIMP_API_KEY),
-                 json={"email_address": email, "status_if_new": "subscribed"}, timeout=10).raise_for_status()
+        httpx.put(url, auth=("anystring", MAILCHIMP_API_KEY), json=payload, timeout=10).raise_for_status()
         return True
     except Exception:  # noqa: BLE001 — the subscriber is already safely stored in our own database regardless
         log.exception("Mailchimp forward failed for %s", email)
