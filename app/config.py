@@ -59,7 +59,14 @@ SLACK_WEBHOOK_DEFAULT = env("SLACK_WEBHOOK_DEFAULT")
 # --- Billing — optional. Organizations simply stay 'trialing' until these exist. ---
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
-PAYSTACK_SECRET_KEY = env("PAYSTACK_SECRET_KEY")
+# Flutterwave — secret key from Dashboard > Settings > API Keys, and a
+# "secret hash" you invent yourself and paste into Dashboard > Settings >
+# Webhooks. Flutterwave echoes it back on every webhook call so you can
+# confirm the request really came from them (it's a shared password, not an
+# HMAC signature like Stripe uses). Flutterwave is the local/African-card
+# rail here — it replaced Paystack rather than sitting alongside it.
+FLUTTERWAVE_SECRET_KEY = env("FLUTTERWAVE_SECRET_KEY")
+FLUTTERWAVE_SECRET_HASH = env("FLUTTERWAVE_SECRET_HASH")
 
 # --- Cadence (minutes) ---
 CADENCE_NEWS = int(env("CADENCE_NEWS", "20"))

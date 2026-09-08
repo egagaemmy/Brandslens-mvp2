@@ -46,7 +46,7 @@ class Organization(Base):
     plan: Mapped[str] = mapped_column(String(20), default="professional")   # professional / corp_growth / enterprise
     workspace_limit: Mapped[int] = mapped_column(Integer, default=1)        # None-equivalent: a very large int for "unlimited"
     keyword_limit: Mapped[int] = mapped_column(Integer, default=5)
-    billing_provider: Mapped[str] = mapped_column(String(20), default="")   # 'stripe' | 'paystack' | '' (never paid)
+    billing_provider: Mapped[str] = mapped_column(String(20), default="")   # 'stripe' | 'flutterwave' | '' (never paid)
     billing_customer_id: Mapped[str] = mapped_column(String(120), default="")
     billing_subscription_id: Mapped[str] = mapped_column(String(120), default="")
     billing_status: Mapped[str] = mapped_column(String(20), default="unpaid")

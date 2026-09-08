@@ -716,10 +716,10 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
     try:
         if body.provider == "stripe":
             url = billing.create_stripe_checkout(org, body.plan, body.cycle, member.email)
-        elif body.provider == "paystack":
-            url = billing.create_paystack_checkout(org, body.plan, body.cycle, member.email)
+        elif body.provider == "flutterwave":
+            url = billing.create_flutterwave_checkout(org, body.plan, body.cycle, member.email)
         else:
-            raise HTTPException(422, "provider must be 'stripe' or 'paystack'")
+            raise HTTPException(422, "provider must be 'stripe' or 'flutterwave'")
     except BillingNotConfigured as e:
         raise HTTPException(409, str(e))
     return {"checkout_url": url}
@@ -733,10 +733,10 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
         raise HTTPException(400, "Invalid signature")
 
 
-@app.post("/api/billing/webhook/paystack")
-async def paystack_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
+@app.post("/api/billing/webhook/flutterwave")
+async def flutterwave_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
     try:
-        return billing.handle_paystack_webhook(db, await request.body(), request.headers.get("x-paystack-signature", ""))
+        return billing.handle_flutterwave_webhook(db, await request.body(), request.headers.get("verif-hash", ""))
     except PermissionError:
         raise HTTPException(400, "Invalid signature")
 

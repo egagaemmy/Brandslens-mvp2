@@ -25,7 +25,7 @@ parties (e.g., the author of a social media post).
   (for the Media Room's audit trail — this is a core safety feature, not
   incidental tracking, and is disclosed here for that reason).
 - **Billing data**: processed by our payment providers (Stripe and/or
-  Paystack) — BrandsLens does not store your card number.
+  Flutterwave) — BrandsLens does not store your card number.
 
 ## 3. Data we collect about third parties (mention data)
 
@@ -59,7 +59,7 @@ BrandsLens independently gathered.
 
 - **Sub-processors**: hosting provider, Anthropic (for AI classification —
   mention text is sent for analysis; account passwords and payment details
-  are never sent to this or any AI provider), Stripe/Paystack (billing),
+  are never sent to this or any AI provider), Stripe/Flutterwave (billing),
   email delivery provider (invites and notifications).
 - We do not sell personal data. We do not share mention data with any party
   other than the Customer whose brand it concerns, except as required by law

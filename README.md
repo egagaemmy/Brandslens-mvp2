@@ -70,7 +70,7 @@ actually produce a valid, branded file — not just that the endpoint returns
 ## What's still ahead
 
 - Actual deployment to a public URL (needs your hosting account)
-- Real Stripe/Paystack keys (checkout fails safely with a clear message
+- Real Stripe/Flutterwave keys (checkout fails safely with a clear message
   until these are set — see `app/services/billing.py`)
 - Legal review of the Terms of Service and Privacy Policy drafts in `legal/`
 - Facebook/Instagram, TikTok, and X (still off by default, exactly as scoped)

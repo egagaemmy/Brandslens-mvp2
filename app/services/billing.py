@@ -1,14 +1,16 @@
-"""app/services/billing.py — Stripe + Paystack, wired into the real MVP.
+"""app/services/billing.py — Stripe + Flutterwave, wired into the real MVP.
 
 Deliberately fails soft: if no billing keys are configured, checkout raises a
 clean, expected error rather than crashing, and organizations simply stay in
 'trialing' status. This matches the "don't let missing APIs block launch"
 principle applied everywhere else in this build — you can genuinely run this
 in production for trial customers today and turn on real billing the moment
-Stripe/Paystack accounts exist, without changing anything else.
+Stripe/Flutterwave accounts exist, without changing anything else.
+
+Flutterwave replaced Paystack here as the local/African-card rail — this file
+no longer talks to Paystack at all.
 """
 from __future__ import annotations
-import hashlib
 import hmac
 import json
 import logging
@@ -18,7 +20,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PAYSTACK_SECRET_KEY, FRONTEND_ORIGIN
+from ..config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_SECRET_HASH, FRONTEND_ORIGIN
 from ..models import Organization, OrgMember, BillingEvent, now_utc
 
 log = logging.getLogger("billing")
@@ -27,29 +29,29 @@ PLAN_CATALOG = {
     "standard": {"annual_usd": 1500, "monthly_usd": 143.75, "daily_usd": 4.93,
                 "stripe_price_annual": "price_standard_annual", "stripe_price_monthly": "price_standard_monthly",
                 "stripe_price_daily": "price_standard_daily",
-                "paystack_plan_annual": "PLN_standard_annual", "paystack_plan_monthly": "PLN_standard_monthly",
-                "paystack_plan_daily": "PLN_standard_daily"},
+                "flutterwave_plan_annual": "FLW_standard_annual", "flutterwave_plan_monthly": "FLW_standard_monthly",
+                "flutterwave_plan_daily": "FLW_standard_daily"},
     "growth": {"annual_usd": 2500, "monthly_usd": 239.58, "daily_usd": 8.22,
               "stripe_price_annual": "price_growth_annual", "stripe_price_monthly": "price_growth_monthly",
               "stripe_price_daily": "price_growth_daily",
-              "paystack_plan_annual": "PLN_growth_annual", "paystack_plan_monthly": "PLN_growth_monthly",
-              "paystack_plan_daily": "PLN_growth_daily"},
+              "flutterwave_plan_annual": "FLW_growth_annual", "flutterwave_plan_monthly": "FLW_growth_monthly",
+              "flutterwave_plan_daily": "FLW_growth_daily"},
     "professional": {"annual_usd": 3500, "monthly_usd": 335.42, "daily_usd": 11.51,
                      "stripe_price_annual": "price_professional_annual", "stripe_price_monthly": "price_professional_monthly",
                      "stripe_price_daily": "price_professional_daily",
-                     "paystack_plan_annual": "PLN_professional_annual", "paystack_plan_monthly": "PLN_professional_monthly",
-                     "paystack_plan_daily": "PLN_professional_daily"},
+                     "flutterwave_plan_annual": "FLW_professional_annual", "flutterwave_plan_monthly": "FLW_professional_monthly",
+                     "flutterwave_plan_daily": "FLW_professional_daily"},
     # Enterprise deliberately has no entry here — there's no fixed price to
     # check out against. It's handled entirely by submit_enterprise_inquiry()
     # below, which emails a real conversation instead of charging a card.
 }
-CYCLE_KEYS = {"annual": ("annual_usd", "stripe_price_annual", "paystack_plan_annual"),
-             "monthly": ("monthly_usd", "stripe_price_monthly", "paystack_plan_monthly"),
-             "daily": ("daily_usd", "stripe_price_daily", "paystack_plan_daily")}
+CYCLE_KEYS = {"annual": ("annual_usd", "stripe_price_annual", "flutterwave_plan_annual"),
+             "monthly": ("monthly_usd", "stripe_price_monthly", "flutterwave_plan_monthly"),
+             "daily": ("daily_usd", "stripe_price_daily", "flutterwave_plan_daily")}
 
 
 class BillingNotConfigured(Exception):
-    """Raised when a checkout is attempted before Stripe/Paystack keys exist.
+    """Raised when a checkout is attempted before Stripe/Flutterwave keys exist.
     The API turns this into a clear message, not a 500 — this is an expected
     state at MVP stage, not a bug."""
 
@@ -82,28 +84,35 @@ def create_stripe_checkout(org: Organization, plan: str, cycle: str, customer_em
     return session.url
 
 
-def create_paystack_checkout(org: Organization, plan: str, cycle: str, customer_email: str) -> str:
-    if not PAYSTACK_SECRET_KEY:
-        raise BillingNotConfigured("Paystack isn't connected yet — please try again shortly or contact support.")
+def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, customer_email: str) -> str:
+    if not FLUTTERWAVE_SECRET_KEY:
+        raise BillingNotConfigured("Flutterwave isn't connected yet — please try again shortly or contact support.")
     if cycle not in CYCLE_KEYS:
         raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
     catalog = PLAN_CATALOG[plan]
-    _, _, paystack_key = CYCLE_KEYS[cycle]
-    plan_code = catalog[paystack_key]
-    resp = httpx.post("https://api.paystack.co/transaction/initialize",
-                      headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"},
-                      json={"email": customer_email, "plan": plan_code,
-                           "metadata": {"organization_id": org.id, "plan": plan, "cycle": cycle},
-                           "callback_url": f"{FRONTEND_ORIGIN}/billing/success"}, timeout=20)
+    amount_key, _, flw_key = CYCLE_KEYS[cycle]
+    payment_plan = catalog[flw_key]
+    # tx_ref must be unique per attempt — Flutterwave uses it to dedupe retries.
+    tx_ref = f"{org.id}-{plan}-{cycle}-{int(now_utc().timestamp())}"
+    resp = httpx.post("https://api.flutterwave.com/v3/payments",
+                      headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"},
+                      json={"tx_ref": tx_ref, "amount": catalog[amount_key], "currency": "USD",
+                           "redirect_url": f"{FRONTEND_ORIGIN}/billing/success",
+                           "payment_plan": payment_plan,
+                           "customer": {"email": customer_email},
+                           "meta": {"organization_id": org.id, "plan": plan, "cycle": cycle}}, timeout=20)
     resp.raise_for_status()
-    return resp.json()["data"]["authorization_url"]
+    return resp.json()["data"]["link"]
 
 
-def verify_paystack_signature(payload: bytes, signature_header: str) -> bool:
-    if not PAYSTACK_SECRET_KEY:
+def verify_flutterwave_signature(signature_header: str) -> bool:
+    # Flutterwave doesn't HMAC-sign the payload like Stripe does — you set a
+    # "secret hash" in Dashboard > Settings > Webhooks, and Flutterwave
+    # echoes it back verbatim in the verif-hash header on every call. Valid
+    # only if it matches exactly.
+    if not FLUTTERWAVE_SECRET_HASH:
         return False
-    computed = hmac.new(PAYSTACK_SECRET_KEY.encode(), payload, hashlib.sha512).hexdigest()
-    return hmac.compare_digest(computed, signature_header or "")
+    return hmac.compare_digest(FLUTTERWAVE_SECRET_HASH, signature_header or "")
 
 
 def handle_stripe_webhook(db: Session, payload: bytes, sig_header: str) -> dict:
@@ -130,21 +139,37 @@ def handle_stripe_webhook(db: Session, payload: bytes, sig_header: str) -> dict:
     return {"received": True}
 
 
-def handle_paystack_webhook(db: Session, payload: bytes, signature_header: str) -> dict:
-    if not verify_paystack_signature(payload, signature_header):
-        raise PermissionError("invalid_paystack_signature")
+def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: str) -> dict:
+    if not verify_flutterwave_signature(signature_header):
+        raise PermissionError("invalid_flutterwave_signature")
     event = json.loads(payload)
     etype, data = event.get("event"), event.get("data", {})
-    meta = data.get("metadata") or {}
+    meta = data.get("meta") or data.get("meta_data") or {}
     org_id, plan = meta.get("organization_id"), meta.get("plan")
 
-    if etype == "charge.success":
-        _activate_plan(db, org_id, plan, "paystack", data.get("customer", {}).get("customer_code"),
-                       data.get("plan_object", {}).get("plan_code"))
-    elif etype == "subscription.disable":
+    if etype == "charge.completed" and data.get("status") == "successful":
+        # The verif-hash proves the call came from Flutterwave, but not that
+        # this specific transaction really cleared — Flutterwave recommends
+        # re-querying the transaction server-side before granting access, so
+        # a replayed or forged "successful" payload can't activate a plan.
+        tx_id = data.get("id")
+        verified = False
+        if tx_id and FLUTTERWAVE_SECRET_KEY:
+            resp = httpx.get(f"https://api.flutterwave.com/v3/transactions/{tx_id}/verify",
+                             headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, timeout=20)
+            if resp.status_code == 200:
+                vdata = resp.json().get("data", {})
+                verified = vdata.get("status") == "successful" and vdata.get("amount", 0) >= data.get("amount", 0)
+        if verified:
+            _activate_plan(db, org_id, plan, "flutterwave", str(data.get("customer", {}).get("id", "")),
+                           str(data.get("id", "")))
+        else:
+            log.warning("Flutterwave webhook claimed success but re-verification failed; not activating")
+    elif etype in ("subscription.cancelled", "subscription.expired"):
         _downgrade(db, org_id)
 
-    db.add(BillingEvent(organization_id=org_id or "", provider="paystack", event_type=etype, raw=json.dumps(event)[:8000]))
+    db.add(BillingEvent(organization_id=org_id or "", provider="flutterwave", event_type=etype or "unknown",
+                        raw=json.dumps(event)[:8000]))
     db.commit()
     return {"received": True}
 
