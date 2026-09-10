@@ -862,9 +862,11 @@ def list_sources_internal(member: OrgMember = Depends(current_member), db: Sessi
 
 class EnterpriseInquiryBody(BaseModel):
     name: str
+    designation: str = ""
     email: str
     company: str
     message: str = ""
+    preferred_meeting_time: str = ""
 
 
 class ChatEnquiryBody(BaseModel):
@@ -1124,7 +1126,8 @@ def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
     """Public, unauthenticated — this is the entire 'checkout flow' for
     Enterprise, since there's no fixed price to charge a card against."""
     from .services.billing import submit_enterprise_inquiry
-    sent = submit_enterprise_inquiry(body.name, body.email, body.company, body.message)
+    sent = submit_enterprise_inquiry(body.name, body.designation, body.email, body.company,
+                                     body.message, body.preferred_meeting_time)
     return {"ok": True, "sent": sent}
 
 

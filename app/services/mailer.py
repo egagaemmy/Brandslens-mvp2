@@ -83,13 +83,18 @@ def send_password_reset(to: str, name: str, reset_link: str) -> bool:
     return send_email(to, "Reset your BrandsLens password", body)
 
 
-def send_enterprise_inquiry(name: str, email: str, company: str, message: str) -> bool:
+def send_enterprise_inquiry(name: str, designation: str, email: str, company: str,
+                            message: str, preferred_meeting_time: str) -> bool:
     """Enterprise has no self-serve checkout — this is the entire 'purchase
     flow' for that tier: a real message, to a real inbox, to start a real
     conversation about custom pricing."""
     from ..config import ENTERPRISE_INQUIRY_EMAIL
+    designation_line = f"<br><b>Designation:</b> {designation}" if designation else ""
+    meeting_line = (f"<p><b>Preferred meeting time:</b> {preferred_meeting_time}</p>"
+                    if preferred_meeting_time else "")
     body = _wrap(f"""<p><b>New Enterprise inquiry</b></p>
-      <p><b>Name:</b> {name}<br><b>Email:</b> {email}<br><b>Company:</b> {company}</p>
+      <p><b>Name:</b> {name}{designation_line}<br><b>Email:</b> {email}<br><b>Company:</b> {company}</p>
+      {meeting_line}
       <p><b>Message:</b><br>{message}</p>""")
     return send_email(ENTERPRISE_INQUIRY_EMAIL, f"Enterprise inquiry from {company}", body)
 

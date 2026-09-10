@@ -53,7 +53,7 @@ MAILCHIMP_SERVER_PREFIX = env("MAILCHIMP_SERVER_PREFIX")
 MAILCHIMP_LIST_ID = env("MAILCHIMP_LIST_ID")
 ADMIN_SETUP_SECRET = env("ADMIN_SETUP_SECRET")  # temporary — protects the one-time /api/setup/create-admin route
 MAIL_FROM = env("MAIL_FROM", "watch@mail.brandslens.com")
-ENTERPRISE_INQUIRY_EMAIL = env("ENTERPRISE_INQUIRY_EMAIL", "kgrnigeria@gmail.com")
+ENTERPRISE_INQUIRY_EMAIL = env("ENTERPRISE_INQUIRY_EMAIL", "info@brandslens.com")
 SLACK_WEBHOOK_DEFAULT = env("SLACK_WEBHOOK_DEFAULT")
 
 # --- Billing — optional. Organizations simply stay 'trialing' until these exist. ---

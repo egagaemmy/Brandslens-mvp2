@@ -30,22 +30,22 @@ PLAN_CATALOG = {
                 "stripe_price_daily": "price_standard_daily",
                 "paystack_plan_annual": "PLN_standard_annual", "paystack_plan_monthly": "PLN_standard_monthly",
                 "paystack_plan_daily": "PLN_standard_daily",
-                "flutterwave_plan_annual": "FLW_standard_annual", "flutterwave_plan_monthly": "FLW_standard_monthly",
-                "flutterwave_plan_daily": "FLW_standard_daily"},
+                "flutterwave_plan_annual": "168960", "flutterwave_plan_monthly": "168959",
+                "flutterwave_plan_daily": "168958"},
     "growth": {"annual_usd": 2500, "monthly_usd": 239.58, "daily_usd": 8.22,
               "stripe_price_annual": "price_growth_annual", "stripe_price_monthly": "price_growth_monthly",
               "stripe_price_daily": "price_growth_daily",
               "paystack_plan_annual": "PLN_growth_annual", "paystack_plan_monthly": "PLN_growth_monthly",
               "paystack_plan_daily": "PLN_growth_daily",
-              "flutterwave_plan_annual": "FLW_growth_annual", "flutterwave_plan_monthly": "FLW_growth_monthly",
-              "flutterwave_plan_daily": "FLW_growth_daily"},
+              "flutterwave_plan_annual": "168963", "flutterwave_plan_monthly": "168962",
+              "flutterwave_plan_daily": "168961"},
     "professional": {"annual_usd": 3500, "monthly_usd": 335.42, "daily_usd": 11.51,
                      "stripe_price_annual": "price_professional_annual", "stripe_price_monthly": "price_professional_monthly",
                      "stripe_price_daily": "price_professional_daily",
                      "paystack_plan_annual": "PLN_professional_annual", "paystack_plan_monthly": "PLN_professional_monthly",
                      "paystack_plan_daily": "PLN_professional_daily",
-                     "flutterwave_plan_annual": "FLW_professional_annual", "flutterwave_plan_monthly": "FLW_professional_monthly",
-                     "flutterwave_plan_daily": "FLW_professional_daily"},
+                     "flutterwave_plan_annual": "168966", "flutterwave_plan_monthly": "168965",
+                     "flutterwave_plan_daily": "168964"},
     # Enterprise deliberately has no entry here — there's no fixed price to
     # check out against. It's handled entirely by submit_enterprise_inquiry()
     # below, which emails a real conversation instead of charging a card.
@@ -62,12 +62,13 @@ class BillingNotConfigured(Exception):
     state at MVP stage, not a bug."""
 
 
-def submit_enterprise_inquiry(name: str, email: str, company: str, message: str) -> bool:
+def submit_enterprise_inquiry(name: str, designation: str, email: str, company: str,
+                              message: str, preferred_meeting_time: str) -> bool:
     """Enterprise has no fixed price — 'checkout' for this tier is a real
     conversation, not a card charge. This emails the inquiry directly rather
     than creating any billing record at all."""
     from .mailer import send_enterprise_inquiry
-    return send_enterprise_inquiry(name, email, company, message)
+    return send_enterprise_inquiry(name, designation, email, company, message, preferred_meeting_time)
 
 
 def create_stripe_checkout(org: Organization, plan: str, cycle: str, customer_email: str) -> str:
