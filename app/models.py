@@ -46,7 +46,7 @@ class Organization(Base):
     plan: Mapped[str] = mapped_column(String(20), default="professional")   # professional / corp_growth / enterprise
     workspace_limit: Mapped[int] = mapped_column(Integer, default=1)        # None-equivalent: a very large int for "unlimited"
     keyword_limit: Mapped[int] = mapped_column(Integer, default=5)
-    billing_provider: Mapped[str] = mapped_column(String(20), default="")   # 'stripe' | 'flutterwave' | '' (never paid)
+    billing_provider: Mapped[str] = mapped_column(String(20), default="")   # 'stripe' | 'paystack' | '' (never paid)
     billing_customer_id: Mapped[str] = mapped_column(String(120), default="")
     billing_subscription_id: Mapped[str] = mapped_column(String(120), default="")
     billing_status: Mapped[str] = mapped_column(String(20), default="unpaid")
@@ -57,6 +57,13 @@ class Organization(Base):
     plan_activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     plan_cancelled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     read_only_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Only meaningful for a one-time, multi-period purchase (quantity > 1 at
+    # checkout) — a customer who pays for 3 months up front isn't on a
+    # recurring Flutterwave plan, so there's no subscription telling us when
+    # to expect the next charge. This is that date instead. Left null for
+    # ordinary recurring subscriptions (quantity == 1), where the provider's
+    # own billing cycle is the source of truth.
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     members: Mapped[list["OrgMember"]] = relationship(back_populates="organization", cascade="all, delete-orphan")

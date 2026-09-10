@@ -706,20 +706,26 @@ class CheckoutBody(BaseModel):
     plan: str
     cycle: str = "annual"
     provider: str = "stripe"
+    quantity: int = 1
 
 
 @app.post("/api/billing/checkout")
 def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role("owner", "lead")), db: Session = Depends(get_db)) -> dict:
     if body.plan not in billing.PLAN_CATALOG:
         raise HTTPException(422, "Unknown plan")
+    max_quantity = {"daily": 90, "monthly": 24, "annual": 5}.get(body.cycle, 12)
+    if body.quantity < 1 or body.quantity > max_quantity:
+        raise HTTPException(422, f"For {body.cycle} billing, quantity must be between 1 and {max_quantity}.")
     org = db.get(Organization, member.organization_id)
     try:
         if body.provider == "stripe":
             url = billing.create_stripe_checkout(org, body.plan, body.cycle, member.email)
+        elif body.provider == "paystack":
+            url = billing.create_paystack_checkout(org, body.plan, body.cycle, member.email)
         elif body.provider == "flutterwave":
-            url = billing.create_flutterwave_checkout(org, body.plan, body.cycle, member.email)
+            url = billing.create_flutterwave_checkout(org, body.plan, body.cycle, member.email, body.quantity)
         else:
-            raise HTTPException(422, "provider must be 'stripe' or 'flutterwave'")
+            raise HTTPException(422, "provider must be 'stripe', 'paystack', or 'flutterwave'")
     except BillingNotConfigured as e:
         raise HTTPException(409, str(e))
     return {"checkout_url": url}
@@ -729,6 +735,14 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
 async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
     try:
         return billing.handle_stripe_webhook(db, await request.body(), request.headers.get("stripe-signature", ""))
+    except PermissionError:
+        raise HTTPException(400, "Invalid signature")
+
+
+@app.post("/api/billing/webhook/paystack")
+async def paystack_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
+    try:
+        return billing.handle_paystack_webhook(db, await request.body(), request.headers.get("x-paystack-signature", ""))
     except PermissionError:
         raise HTTPException(400, "Invalid signature")
 

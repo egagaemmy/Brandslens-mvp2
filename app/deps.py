@@ -37,12 +37,21 @@ def active_member(member: OrgMember = Depends(current_member), db: Session = Dep
     scripts/create_admin.py — never reachable through public signup.
     Deliberately NOT used by /api/auth/* or /api/billing/* routes — someone
     who's locked out must still be able to log in and pay to unlock
-    themselves; only actual product data is gated by this."""
+    themselves; only actual product data is gated by this.
+
+    paid_until only has a value for a one-time, multi-period purchase
+    (quantity > 1 at checkout) — an ordinary recurring subscription leaves
+    it null, since the provider's own billing cycle is what renews access,
+    not a date we track ourselves. Checking it here is what actually makes
+    a prepaid period end on schedule instead of granting access forever
+    the moment it's first activated."""
     org = db.get(Organization, member.organization_id)
     if org.billing_status == "exempt":
         return member
     if org.billing_status != "active":
         raise HTTPException(402, "Payment required to activate your BrandsLens account.")
+    if org.paid_until and aware(org.paid_until) < now_utc():
+        raise HTTPException(402, "Your prepaid period has ended — please renew to continue.")
     return member
 
 
