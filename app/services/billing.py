@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PAYSTACK_SECRET_KEY,
-                      FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_WEBHOOK_HASH, FRONTEND_ORIGIN)
+                      FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_WEBHOOK_HASH, FRONTEND_ORIGIN, APP_URL)
 from ..models import Organization, OrgMember, BillingEvent, now_utc
 
 log = logging.getLogger("billing")
@@ -83,8 +83,8 @@ def create_stripe_checkout(org: Organization, plan: str, cycle: str, customer_em
     price_id = catalog[stripe_key]
     session = stripe.checkout.Session.create(
         mode="subscription", customer_email=customer_email, line_items=[{"price": price_id, "quantity": 1}],
-        success_url=f"{FRONTEND_ORIGIN}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{FRONTEND_ORIGIN}/billing/cancelled",
+        success_url=f"{APP_URL}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{APP_URL}/billing/cancelled",
         client_reference_id=org.id, metadata={"organization_id": org.id, "plan": plan, "cycle": cycle},
         subscription_data={"metadata": {"organization_id": org.id, "plan": plan}},
     )
@@ -103,7 +103,7 @@ def create_paystack_checkout(org: Organization, plan: str, cycle: str, customer_
                       headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"},
                       json={"email": customer_email, "plan": plan_code,
                            "metadata": {"organization_id": org.id, "plan": plan, "cycle": cycle},
-                           "callback_url": f"{FRONTEND_ORIGIN}/billing/success"}, timeout=20)
+                           "callback_url": f"{APP_URL}/billing/success"}, timeout=20)
     resp.raise_for_status()
     return resp.json()["data"]["authorization_url"]
 
@@ -134,7 +134,7 @@ def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, custom
     base_price = catalog[price_key]
     tx_ref = f"blens-{org.id}-{plan}-{cycle}-{int(now_utc().timestamp())}"
     body = {"tx_ref": tx_ref, "amount": round(base_price * quantity, 2), "currency": "USD",
-           "redirect_url": f"{FRONTEND_ORIGIN}/billing/success",
+           "redirect_url": f"{APP_URL}/billing/success",
            "customer": {"email": customer_email},
            "meta": {"organization_id": org.id, "plan": plan, "cycle": cycle, "quantity": quantity}}
     if quantity == 1:

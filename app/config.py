@@ -9,6 +9,15 @@ def env(key: str, default: str = "") -> str:
 APP_NAME = "BrandsLens"
 TIMEZONE = env("TZ", "Africa/Lagos")
 FRONTEND_ORIGIN = env("FRONTEND_ORIGIN", "*")
+# Used specifically for payment redirect URLs (Stripe success/cancel,
+# Paystack callback, Flutterwave redirect) — these need a genuine, real
+# URL with a scheme, which FRONTEND_ORIGIN can't reliably provide on its
+# own: it defaults to "*" (fine for CORS, its original purpose) and is
+# separately used for the marketing site's URL on blog/legal pages.
+# Overloading one variable for three different jobs is exactly how a
+# payment redirect ended up being built as the literal, broken string
+# "*/billing/success" when FRONTEND_ORIGIN was never explicitly set.
+APP_URL = env("APP_URL", "https://app.brandslens.com")
 # The blog's own canonical address — a dedicated subdomain of the real
 # domain, since the blog is served by this backend directly, not by the
 # marketing site (Vercel) or the app (Cloudflare Pages). Used for
