@@ -139,10 +139,26 @@ def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, custom
            "meta": {"organization_id": org.id, "plan": plan, "cycle": cycle, "quantity": quantity}}
     if quantity == 1:
         body["payment_plan"] = catalog[flutterwave_key]
-    resp = httpx.post("https://api.flutterwave.com/v3/payments",
-                      headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, json=body, timeout=20)
-    resp.raise_for_status()
-    return resp.json()["data"]["link"]
+    try:
+        resp = httpx.post("https://api.flutterwave.com/v3/payments",
+                          headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, json=body, timeout=20)
+        resp.raise_for_status()
+        return resp.json()["data"]["link"]
+    except httpx.HTTPStatusError as e:
+        # Surface Flutterwave's own error message rather than a blind 500 —
+        # this is genuinely the only way to tell "invalid plan ID" apart
+        # from "account not approved for USD" apart from a dozen other real
+        # reasons this specific call can fail, and none of them look the
+        # same to the customer without this.
+        try:
+            flw_message = e.response.json().get("message", str(e))
+        except Exception:  # noqa: BLE001
+            flw_message = str(e)
+        log.error("Flutterwave checkout rejected: %s (status %s)", flw_message, e.response.status_code)
+        raise BillingNotConfigured(f"Flutterwave couldn't start this payment: {flw_message}")
+    except httpx.RequestError as e:
+        log.exception("Flutterwave checkout request failed to even reach Flutterwave")
+        raise BillingNotConfigured("Couldn't reach Flutterwave right now — please try again shortly.") from e
 
 
 def verify_paystack_signature(payload: bytes, signature_header: str) -> bool:

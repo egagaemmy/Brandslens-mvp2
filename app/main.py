@@ -31,7 +31,19 @@ from .collectors import news_collector, nairaland_collector, hackernews_collecto
 
 app = FastAPI(title=APP_NAME)
 log = logging.getLogger("main")
-app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_ORIGIN] if FRONTEND_ORIGIN != "*" else ["*"],
+# CORS deliberately does NOT rely solely on FRONTEND_ORIGIN — that variable
+# is also used elsewhere for a different purpose (the "back to homepage"
+# link on blog/legal pages, which should point at the marketing site).
+# Using it as the *only* allowed CORS origin meant that if it were ever set
+# to the marketing site's URL rather than the app's, real signup/login
+# requests from app.brandslens.com would be silently rejected by the
+# browser before ever reaching this backend — a network-level failure
+# that looks like "something went wrong" with no useful detail. Listing
+# every real known origin explicitly removes that whole class of bug.
+KNOWN_ORIGINS = ["https://brandslens.com", "https://www.brandslens.com",
+                 "https://app.brandslens.com", "https://blog.brandslens.com"]
+cors_origins = KNOWN_ORIGINS if FRONTEND_ORIGIN == "*" else list({*KNOWN_ORIGINS, FRONTEND_ORIGIN})
+app.add_middleware(CORSMiddleware, allow_origins=cors_origins,
                    allow_methods=["*"], allow_headers=["*"], expose_headers=["Content-Disposition"])
 
 COLLECTORS = [news_collector, nairaland_collector, hackernews_collector, reddit_collector, youtube_collector, domain_collector, x_collector]
