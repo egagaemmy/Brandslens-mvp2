@@ -719,6 +719,7 @@ class CheckoutBody(BaseModel):
     cycle: str = "annual"
     provider: str = "stripe"
     quantity: int = 1
+    pay_in_ngn: bool = False
 
 
 @app.post("/api/billing/checkout")
@@ -735,12 +736,21 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
         elif body.provider == "paystack":
             url = billing.create_paystack_checkout(org, body.plan, body.cycle, member.email)
         elif body.provider == "flutterwave":
-            url = billing.create_flutterwave_checkout(org, body.plan, body.cycle, member.email, body.quantity)
+            url = billing.create_flutterwave_checkout(org, body.plan, body.cycle, member.email, body.quantity, body.pay_in_ngn)
         else:
             raise HTTPException(422, "provider must be 'stripe', 'paystack', or 'flutterwave'")
     except BillingNotConfigured as e:
         raise HTTPException(409, str(e))
     return {"checkout_url": url}
+
+
+@app.get("/api/billing/ngn-rate")
+def get_ngn_rate() -> dict:
+    """Public — lets the frontend show an accurate converted NGN price
+    before checkout, rather than hardcoding a rate that could drift out
+    of sync with what the backend actually charges."""
+    from .config import NGN_PER_USD_RATE
+    return {"rate": NGN_PER_USD_RATE}
 
 
 class PendingCheckoutBody(BaseModel):
@@ -752,6 +762,7 @@ class PendingCheckoutBody(BaseModel):
     plan: str
     cycle: str = "annual"
     quantity: int = 1
+    pay_in_ngn: bool = False
 
 
 @app.post("/api/billing/pending-checkout")
@@ -780,7 +791,7 @@ def start_pending_checkout(body: PendingCheckoutBody, db: Session = Depends(get_
     db.add(pending)
     db.flush()
     try:
-        url, tx_ref = billing.create_flutterwave_checkout_for_signup(pending.id, body.plan, body.cycle, body.quantity, body.email)
+        url, tx_ref = billing.create_flutterwave_checkout_for_signup(pending.id, body.plan, body.cycle, body.quantity, body.email, body.pay_in_ngn)
     except BillingNotConfigured as e:
         db.rollback()
         raise HTTPException(409, str(e))

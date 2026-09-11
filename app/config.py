@@ -70,6 +70,15 @@ STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
 PAYSTACK_SECRET_KEY = env("PAYSTACK_SECRET_KEY")
 FLUTTERWAVE_SECRET_KEY = env("FLUTTERWAVE_SECRET_KEY")
+# Bank transfer, USSD, and direct account payment are Flutterwave payment
+# methods available only for NGN-denominated charges — not an option on
+# our normal USD checkout at all. This is the rate used to convert a plan's
+# USD price into a real Naira amount for that fallback path specifically.
+# Deliberately a value you set and update yourself, not a live-fetched
+# rate: a payment flow shouldn't depend on a third external API being up,
+# and a fixed, known rate is more predictable for both you and the
+# customer than one that could shift mid-checkout.
+NGN_PER_USD_RATE = float(env("NGN_PER_USD_RATE", "1500"))
 # The secret hash YOU choose and enter in the Flutterwave dashboard under
 # Settings > Webhooks — not something Flutterwave generates. This must be
 # set to the exact same value in both places.

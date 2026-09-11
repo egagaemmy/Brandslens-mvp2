@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PAYSTACK_SECRET_KEY,
-                      FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_WEBHOOK_HASH, FRONTEND_ORIGIN, APP_URL)
+                      FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_WEBHOOK_HASH, FRONTEND_ORIGIN, APP_URL, NGN_PER_USD_RATE)
 from ..models import Organization, OrgMember, BillingEvent, PendingSignup, now_utc
 
 log = logging.getLogger("billing")
@@ -109,18 +109,26 @@ def create_paystack_checkout(org: Organization, plan: str, cycle: str, customer_
 
 
 def _flutterwave_initiate_payment(tx_ref: str, amount: float, redirect_url: str, customer_email: str,
-                                  meta: dict, payment_plan: str | None) -> str:
+                                  meta: dict, payment_plan: str | None, currency: str = "USD",
+                                  payment_options: str | None = None) -> str:
     """The actual call to Flutterwave's payment initiation endpoint — shared
     by both an existing organization's checkout and a brand-new prospect's
     pay-first signup checkout. The only real difference between those two
     callers is what goes in tx_ref/meta, not how the call itself or its
-    error handling works, so this is the one place that logic lives."""
+    error handling works, so this is the one place that logic lives.
+
+    currency/payment_options default to the original USD, unrestricted
+    behavior — only the NGN fallback path (bank transfer, USSD, direct
+    account payment) passes anything different, since those payment
+    methods are only available for NGN-denominated charges at all."""
     if not FLUTTERWAVE_SECRET_KEY:
         raise BillingNotConfigured("Flutterwave isn't connected yet — please try again shortly or contact support.")
-    body = {"tx_ref": tx_ref, "amount": amount, "currency": "USD", "redirect_url": redirect_url,
+    body = {"tx_ref": tx_ref, "amount": amount, "currency": currency, "redirect_url": redirect_url,
            "customer": {"email": customer_email}, "meta": meta}
     if payment_plan:
         body["payment_plan"] = payment_plan
+    if payment_options:
+        body["payment_options"] = payment_options
     try:
         resp = httpx.post("https://api.flutterwave.com/v3/payments",
                           headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, json=body, timeout=20)
@@ -146,7 +154,8 @@ def _flutterwave_initiate_payment(tx_ref: str, amount: float, redirect_url: str,
 MAX_QUANTITY = {"daily": 90, "monthly": 24, "annual": 5}
 
 
-def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: str, quantity: int, customer_email: str) -> tuple[str, str]:
+def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: str, quantity: int, customer_email: str,
+                                           pay_in_ngn: bool = False) -> tuple[str, str]:
     """The pay-first equivalent of create_flutterwave_checkout — for a
     prospect who doesn't have an account yet. No Organization exists at
     this point; pending_id (a PendingSignup row's id) is what the webhook
@@ -158,6 +167,11 @@ def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: st
     — there's simply nothing created at all, which is the safe direction
     for this to fail in.
 
+    pay_in_ngn — same fallback and same reasoning as create_flutterwave_checkout:
+    bank transfer/USSD/account payment only exist for NGN charges, so this
+    converts the price and switches payment methods, always as a one-time
+    charge regardless of quantity.
+
     Returns (checkout_url, tx_ref) — the caller needs tx_ref too, to store
     on the PendingSignup row so the post-payment status check can find it."""
     if cycle not in CYCLE_KEYS:
@@ -168,6 +182,14 @@ def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: st
     price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
     base_price = catalog[price_key]
     tx_ref = f"blens-signup-{pending_id}-{int(now_utc().timestamp())}"
+    if pay_in_ngn:
+        url = _flutterwave_initiate_payment(
+            tx_ref=tx_ref, amount=round(base_price * quantity * NGN_PER_USD_RATE, 2),
+            redirect_url=f"{APP_URL}/signup/complete?tx_ref={tx_ref}", customer_email=customer_email,
+            meta={"pending_signup_id": pending_id, "plan": plan, "cycle": cycle, "quantity": quantity, "one_time": True},
+            payment_plan=None, currency="NGN", payment_options="card, banktransfer, ussd, account",
+        )
+        return url, tx_ref
     url = _flutterwave_initiate_payment(
         tx_ref=tx_ref, amount=round(base_price * quantity, 2),
         redirect_url=f"{APP_URL}/signup/complete?tx_ref={tx_ref}", customer_email=customer_email,
@@ -177,7 +199,8 @@ def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: st
     return url, tx_ref
 
 
-def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, customer_email: str, quantity: int = 1) -> str:
+def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, customer_email: str,
+                                quantity: int = 1, pay_in_ngn: bool = False) -> str:
     """Flutterwave's Standard Checkout: a single POST returns a hosted
     payment link, same shape as Paystack's initialize call.
 
@@ -191,7 +214,22 @@ def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, custom
     So `payment_plan` is deliberately omitted (this is NOT recurring),
     the amount is the base price multiplied by quantity, and `quantity` +
     `cycle` travel in `meta` so the webhook can calculate exactly when
-    this purchase's access should lapse if it isn't renewed."""
+    this purchase's access should lapse if it isn't renewed.
+
+    pay_in_ngn is the fallback for a card that can't complete an
+    international USD charge at all — bank transfer, USSD, and direct
+    account payment only exist as Flutterwave payment methods for
+    NGN-denominated charges, so this converts the USD price at
+    NGN_PER_USD_RATE and switches to those methods. Card is included here
+    too, deliberately: the original decline is specifically about the
+    charge being *international* — the same card, charged in Naira
+    instead of dollars, is no longer an international transaction from
+    the bank's point of view, and may genuinely succeed here even though
+    it failed on the USD path. Always a one-time charge, even at
+    quantity 1: the existing payment_plan IDs are USD-denominated and
+    wouldn't apply to an NGN charge, so there's no recurring option on
+    this path — it's genuinely a fallback, not a parallel subscription
+    mechanism."""
     if cycle not in CYCLE_KEYS:
         raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
     if quantity < 1:
@@ -200,6 +238,13 @@ def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, custom
     price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
     base_price = catalog[price_key]
     tx_ref = f"blens-{org.id}-{plan}-{cycle}-{int(now_utc().timestamp())}"
+    if pay_in_ngn:
+        return _flutterwave_initiate_payment(
+            tx_ref=tx_ref, amount=round(base_price * quantity * NGN_PER_USD_RATE, 2),
+            redirect_url=f"{APP_URL}/billing/success", customer_email=customer_email,
+            meta={"organization_id": org.id, "plan": plan, "cycle": cycle, "quantity": quantity, "one_time": True},
+            payment_plan=None, currency="NGN", payment_options="card, banktransfer, ussd, account",
+        )
     return _flutterwave_initiate_payment(
         tx_ref=tx_ref, amount=round(base_price * quantity, 2),
         redirect_url=f"{APP_URL}/billing/success", customer_email=customer_email,
@@ -310,7 +355,8 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
         # before ever activating anything, or creating any account at all.
         verified = _verify_flutterwave_transaction(str(data.get("id", "")), data.get("amount", 0), data.get("currency", "USD"))
         if verified:
-            paid_until = (now_utc() + timedelta(days=CYCLE_DAYS.get(cycle, 365) * quantity)) if quantity > 1 else None
+            is_one_time = quantity > 1 or bool(meta.get("one_time"))
+            paid_until = (now_utc() + timedelta(days=CYCLE_DAYS.get(cycle, 365) * quantity)) if is_one_time else None
             if pending_signup_id:
                 # Pay-first signup: the account doesn't exist yet — this is
                 # the one place it actually gets created, only now that
