@@ -395,6 +395,7 @@ def _activate_plan(db: Session, org_id: str, plan: str, provider: str, customer_
     org = db.get(Organization, org_id)
     if not org:
         return
+    is_first_activation = org.billing_status != "active"
     from .auth import PLAN_WORKSPACE_LIMIT, PLAN_KEYWORD_LIMIT
     org.plan = plan
     org.billing_provider = provider
@@ -406,6 +407,15 @@ def _activate_plan(db: Session, org_id: str, plan: str, provider: str, customer_
     org.workspace_limit = PLAN_WORKSPACE_LIMIT.get(plan, org.workspace_limit)
     org.keyword_limit = PLAN_KEYWORD_LIMIT.get(plan, org.keyword_limit)
     db.commit()
+    if is_first_activation:
+        # Only a genuine first activation — never a renewal or a plan
+        # change for a customer who's already active, which would
+        # otherwise send "Welcome to BrandsLens" to someone who's been a
+        # paying customer for months.
+        owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org_id, OrgMember.role == "owner"))
+        if owner:
+            from .mailer import send_welcome_email
+            send_welcome_email(owner.email, owner.name, plan)
 
 
 def _flag_payment_issue(db: Session, org_id: str) -> None:

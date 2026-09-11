@@ -5,7 +5,7 @@ missing API key never breaks the rest of the app."""
 import logging
 import hashlib
 import httpx
-from ..config import SLACK_WEBHOOK_DEFAULT, RESEND_API_KEY, MAIL_FROM, MAILCHIMP_API_KEY, MAILCHIMP_SERVER_PREFIX, MAILCHIMP_LIST_ID
+from ..config import SLACK_WEBHOOK_DEFAULT, RESEND_API_KEY, MAIL_FROM, MAILCHIMP_API_KEY, MAILCHIMP_SERVER_PREFIX, MAILCHIMP_LIST_ID, APP_URL
 from ..branding import BRAND
 
 log = logging.getLogger("mailer")
@@ -61,6 +61,31 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
     except Exception:  # noqa: BLE001
         log.exception("Email send failed to %s", to)
         return False
+
+
+def send_welcome_email(to: str, name: str, plan: str) -> bool:
+    """Sent the moment a real account is actually created — whether through
+    ordinary signup or the pay-first flow, once payment is confirmed. This
+    is the one email that should always fire for a brand-new customer."""
+    first_name = name.split(" ")[0] if name else "there"
+    body = _wrap(f"""<p>Hi {first_name},</p>
+      <p>Welcome to BrandsLens. You've just joined a community that takes something seriously most
+      people overlook entirely: what's actually being said about a brand when nobody's watching.</p>
+      <p>Ninety six percent of brand crises spread internationally within twenty four hours. Brand
+      impersonation has surged three hundred sixty percent since 2020. And here in Nigeria, businesses
+      face over four thousand cyberattacks every single week. Most of this happens quietly — in comments,
+      on lookalike domains, in conversations a brand never sees until it's too late.</p>
+      <p>BrandsLens exists to close that gap. We watch continuously, across news, social platforms, and
+      forums. We score what we find with real judgment, not just keywords. And when something genuinely
+      matters, we help you act within hours, not days — brands that respond within two hours see sixty one
+      percent better recovery than those who wait.</p>
+      <p>Your <strong>{plan.capitalize()}</strong> workspace is set up and ready — log in any time to see
+      what we're already tracking for you.</p>
+      <p><a href="{APP_URL}/login" style="background:#{BRAND['amber']};color:#0B0F17;padding:10px 20px;
+      border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Go to your dashboard</a></p>
+      <p>You're not just protecting a brand. You're protecting everything built to earn the trust behind it.</p>
+      <p>Welcome aboard.<br>The BrandsLens Team</p>""")
+    return send_email(to, "Welcome to BrandsLens — here's what we're watching for you", body)
 
 
 def _wrap(inner: str) -> str:
