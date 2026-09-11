@@ -11,7 +11,7 @@ from passlib.hash import argon2
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from ..models import Organization, OrgMember, OrgInvite, SessionToken, PasswordResetToken, Workspace, now_utc, aware
+from ..models import Organization, OrgMember, OrgInvite, SessionToken, PasswordResetToken, Workspace, PendingSignup, now_utc, aware
 
 INVITE_TTL_HOURS = 72
 RESET_TTL_HOURS = 2
@@ -143,6 +143,49 @@ def signup(db: Session, company: str, sector: str, plan: str,
                   brand_tokens=starter_tokens,
                   keywords=[f"{company} scam", f"{company} fraud", f"fake {company}",
                            f"impersonating {company}", f"{company} refund"],
+                  rss_feeds=list(DEFAULT_RSS_FEEDS))
+    db.add(ws)
+    db.flush()
+    _seed_default_threat_categories(db, ws)
+    db.commit()
+
+    token = issue_session(db, owner)
+    return owner, token
+
+
+def create_account_from_pending_signup(db: Session, pending: PendingSignup, paid_until=None) -> tuple[OrgMember, str]:
+    """The pay-first counterpart to signup() — called only from the
+    Flutterwave webhook, only after payment has been genuinely confirmed.
+    Deliberately mirrors signup()'s exact account-creation logic (same
+    starter keywords, same default RSS feeds, same threat categories) so a
+    pay-first account looks and behaves identically to a normal one — the
+    only real differences are that the password arrives already hashed
+    (it was hashed the moment the prospect submitted the form, before any
+    payment happened, so it's never held in plain text even briefly), and
+    billing_status is 'active' from the very first row written, since
+    there's no unpaid interim state for an account that only gets created
+    once it's already been paid for."""
+    if db.scalar(select(OrgMember).where(OrgMember.email == pending.email.lower())):
+        raise AuthError("An account with this email already exists.")
+
+    org = Organization(name=pending.company, sector=pending.sector, plan=pending.plan,
+                       workspace_limit=PLAN_WORKSPACE_LIMIT[pending.plan],
+                       keyword_limit=PLAN_KEYWORD_LIMIT[pending.plan],
+                       billing_status="active", paid_until=paid_until)
+    db.add(org)
+    db.flush()
+
+    owner = OrgMember(organization_id=org.id, email=pending.email.lower(), name=pending.name,
+                      password_hash=pending.password_hash, role="owner", status="active",
+                      activated_at=now_utc())
+    db.add(owner)
+    db.flush()
+
+    starter_tokens = [t.strip().lower() for t in pending.company.split() if len(t.strip()) > 2] or [pending.company.lower()]
+    ws = Workspace(organization_id=org.id, name=pending.company, sector=pending.sector, owner_email=pending.email.lower(),
+                  brand_tokens=starter_tokens,
+                  keywords=[f"{pending.company} scam", f"{pending.company} fraud", f"fake {pending.company}",
+                           f"impersonating {pending.company}", f"{pending.company} refund"],
                   rss_feeds=list(DEFAULT_RSS_FEEDS))
     db.add(ws)
     db.flush()

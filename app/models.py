@@ -128,6 +128,36 @@ class PasswordResetToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class PendingSignup(Base):
+    """A prospect's signup details, held here between the moment they start
+    checkout and the moment their payment is actually confirmed — the real
+    Organization/OrgMember/Workspace only get created once a webhook proves
+    payment succeeded, not the moment someone fills out a form. The password
+    is hashed immediately at creation, exactly the same as a real account —
+    this table never holds a plain-text password, even briefly.
+
+    completed_token/completed_member_id are set once the webhook actually
+    processes this row and creates the real account — the frontend's
+    post-payment page polls for these specifically, since that's what lets
+    it log the new user in automatically without ever needing their
+    password a second time."""
+    __tablename__ = "pending_signups"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tx_ref: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    password_hash: Mapped[str] = mapped_column(String(200))
+    company: Mapped[str] = mapped_column(String(200))
+    sector: Mapped[str] = mapped_column(String(100))
+    plan: Mapped[str] = mapped_column(String(20))
+    cycle: Mapped[str] = mapped_column(String(10))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    completed_token: Mapped[str] = mapped_column(String(64), nullable=True)
+    completed_member_id: Mapped[str] = mapped_column(String(36), nullable=True)
+
+
 class SessionToken(Base):
     """Server-issued, revocable. Replaces the flat MVP_API_KEY — every request
     now resolves to exactly one member of exactly one organization."""

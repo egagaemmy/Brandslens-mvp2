@@ -23,7 +23,7 @@ from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention,
-                     EscalationContact, EscalationLog, ThreatCategory, BlogPost, NewsletterSubscriber, now_utc, aware)
+                     EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber, now_utc, aware)
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -741,6 +741,81 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
     except BillingNotConfigured as e:
         raise HTTPException(409, str(e))
     return {"checkout_url": url}
+
+
+class PendingCheckoutBody(BaseModel):
+    name: str
+    email: str
+    password: str
+    company: str
+    sector: str
+    plan: str
+    cycle: str = "annual"
+    quantity: int = 1
+
+
+@app.post("/api/billing/pending-checkout")
+def start_pending_checkout(body: PendingCheckoutBody, db: Session = Depends(get_db)) -> dict:
+    """Public, unauthenticated — this is the entire entry point for the
+    pay-first flow. No account exists yet; one only gets created once
+    Flutterwave's webhook confirms payment actually succeeded. Deliberately
+    mirrors signup()'s own validation exactly, so a prospect never reaches
+    a real payment screen only to be turned away by a rule signup() would
+    have caught up front."""
+    if len(body.password) < 8:
+        raise HTTPException(422, "Password must be at least 8 characters.")
+    if body.plan not in auth.SELF_SERVE_PLANS:
+        raise HTTPException(422, "That plan requires a custom quote — use the Enterprise contact form instead.")
+    if db.scalar(select(OrgMember).where(OrgMember.email == body.email.lower())):
+        raise HTTPException(422, "An account with this email already exists. Try logging in instead.")
+    max_quantity = {"daily": 90, "monthly": 24, "annual": 5}.get(body.cycle, 12)
+    if body.quantity < 1 or body.quantity > max_quantity:
+        raise HTTPException(422, f"For {body.cycle} billing, quantity must be between 1 and {max_quantity}.")
+
+    pending = PendingSignup(
+        tx_ref="",  # set below, once we have the real one from Flutterwave's initiation call
+        name=body.name, email=body.email.lower(), password_hash=auth.hash_password(body.password),
+        company=body.company, sector=body.sector, plan=body.plan, cycle=body.cycle, quantity=body.quantity,
+    )
+    db.add(pending)
+    db.flush()
+    try:
+        url, tx_ref = billing.create_flutterwave_checkout_for_signup(pending.id, body.plan, body.cycle, body.quantity, body.email)
+    except BillingNotConfigured as e:
+        db.rollback()
+        raise HTTPException(409, str(e))
+    pending.tx_ref = tx_ref
+    db.commit()
+    return {"checkout_url": url}
+
+
+@app.get("/api/billing/pending-checkout/{tx_ref}/status")
+def pending_checkout_status(tx_ref: str, db: Session = Depends(get_db)) -> dict:
+    """Public, unauthenticated by design — the only thing needed to check
+    this is the tx_ref itself, which is only ever known to whoever
+    Flutterwave actually redirects back (it's embedded in that redirect
+    URL, never shown anywhere else). This is what the post-payment page
+    polls to find out whether the webhook has processed yet, and to get a
+    real, valid login token the moment it has — without ever asking for
+    the password a second time."""
+    pending = db.scalar(select(PendingSignup).where(PendingSignup.tx_ref == tx_ref))
+    if not pending:
+        raise HTTPException(404, "We don't recognize this payment reference.")
+    if not pending.completed_token:
+        return {"ready": False}
+    member = db.get(OrgMember, pending.completed_member_id)
+    if not member:
+        return {"ready": False}
+    workspaces = db.scalars(select(Workspace).where(Workspace.organization_id == member.organization_id)).all()
+    return {
+        "ready": True,
+        "token": pending.completed_token,
+        "member": {"id": member.id, "email": member.email, "name": member.name, "role": member.role,
+                  "role_label": ROLE_LABEL.get(member.role, member.role),
+                  "avatar_base64": member.avatar_base64, "phone": member.phone, "address": member.address,
+                  "city": member.city, "country": member.country, "job_title": member.job_title},
+        "workspace_ids": [w.id for w in workspaces],
+    }
 
 
 @app.post("/api/billing/webhook/stripe")

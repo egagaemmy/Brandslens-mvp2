@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..config import (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PAYSTACK_SECRET_KEY,
                       FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_WEBHOOK_HASH, FRONTEND_ORIGIN, APP_URL)
-from ..models import Organization, OrgMember, BillingEvent, now_utc
+from ..models import Organization, OrgMember, BillingEvent, PendingSignup, now_utc
 
 log = logging.getLogger("billing")
 
@@ -108,37 +108,19 @@ def create_paystack_checkout(org: Organization, plan: str, cycle: str, customer_
     return resp.json()["data"]["authorization_url"]
 
 
-def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, customer_email: str, quantity: int = 1) -> str:
-    """Flutterwave's Standard Checkout: a single POST returns a hosted
-    payment link, same shape as Paystack's initialize call.
-
-    quantity == 1 (the default) is an ordinary recurring subscription: the
-    plan reference is passed as `payment_plan` so Flutterwave handles the
-    recurring billing itself, same as before.
-
-    quantity > 1 is genuinely different — a customer paying for, say, 3
-    months up front isn't subscribing to a recurring plan at that rate;
-    they're making a one-time payment covering 3 real months of access.
-    So `payment_plan` is deliberately omitted (this is NOT recurring),
-    the amount is the base price multiplied by quantity, and `quantity` +
-    `cycle` travel in `meta` so the webhook can calculate exactly when
-    this purchase's access should lapse if it isn't renewed."""
+def _flutterwave_initiate_payment(tx_ref: str, amount: float, redirect_url: str, customer_email: str,
+                                  meta: dict, payment_plan: str | None) -> str:
+    """The actual call to Flutterwave's payment initiation endpoint — shared
+    by both an existing organization's checkout and a brand-new prospect's
+    pay-first signup checkout. The only real difference between those two
+    callers is what goes in tx_ref/meta, not how the call itself or its
+    error handling works, so this is the one place that logic lives."""
     if not FLUTTERWAVE_SECRET_KEY:
         raise BillingNotConfigured("Flutterwave isn't connected yet — please try again shortly or contact support.")
-    if cycle not in CYCLE_KEYS:
-        raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
-    if quantity < 1:
-        raise BillingNotConfigured("Quantity must be at least 1.")
-    catalog = PLAN_CATALOG[plan]
-    price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
-    base_price = catalog[price_key]
-    tx_ref = f"blens-{org.id}-{plan}-{cycle}-{int(now_utc().timestamp())}"
-    body = {"tx_ref": tx_ref, "amount": round(base_price * quantity, 2), "currency": "USD",
-           "redirect_url": f"{APP_URL}/billing/success",
-           "customer": {"email": customer_email},
-           "meta": {"organization_id": org.id, "plan": plan, "cycle": cycle, "quantity": quantity}}
-    if quantity == 1:
-        body["payment_plan"] = catalog[flutterwave_key]
+    body = {"tx_ref": tx_ref, "amount": amount, "currency": "USD", "redirect_url": redirect_url,
+           "customer": {"email": customer_email}, "meta": meta}
+    if payment_plan:
+        body["payment_plan"] = payment_plan
     try:
         resp = httpx.post("https://api.flutterwave.com/v3/payments",
                           headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, json=body, timeout=20)
@@ -159,6 +141,71 @@ def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, custom
     except httpx.RequestError as e:
         log.exception("Flutterwave checkout request failed to even reach Flutterwave")
         raise BillingNotConfigured("Couldn't reach Flutterwave right now — please try again shortly.") from e
+
+
+MAX_QUANTITY = {"daily": 90, "monthly": 24, "annual": 5}
+
+
+def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: str, quantity: int, customer_email: str) -> tuple[str, str]:
+    """The pay-first equivalent of create_flutterwave_checkout — for a
+    prospect who doesn't have an account yet. No Organization exists at
+    this point; pending_id (a PendingSignup row's id) is what the webhook
+    uses to find the held signup details and actually create the real
+    account, once payment is genuinely confirmed. Kept as a separate
+    function rather than added as an optional parameter to the existing
+    one, since the two have a meaningfully different failure mode: if this
+    one's webhook never arrives, there's no account to leave half-activated
+    — there's simply nothing created at all, which is the safe direction
+    for this to fail in.
+
+    Returns (checkout_url, tx_ref) — the caller needs tx_ref too, to store
+    on the PendingSignup row so the post-payment status check can find it."""
+    if cycle not in CYCLE_KEYS:
+        raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
+    if quantity < 1 or quantity > MAX_QUANTITY.get(cycle, 1):
+        raise BillingNotConfigured(f"Quantity must be between 1 and {MAX_QUANTITY.get(cycle, 1)} for {cycle} billing.")
+    catalog = PLAN_CATALOG[plan]
+    price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
+    base_price = catalog[price_key]
+    tx_ref = f"blens-signup-{pending_id}-{int(now_utc().timestamp())}"
+    url = _flutterwave_initiate_payment(
+        tx_ref=tx_ref, amount=round(base_price * quantity, 2),
+        redirect_url=f"{APP_URL}/signup/complete?tx_ref={tx_ref}", customer_email=customer_email,
+        meta={"pending_signup_id": pending_id, "plan": plan, "cycle": cycle, "quantity": quantity},
+        payment_plan=catalog[flutterwave_key] if quantity == 1 else None,
+    )
+    return url, tx_ref
+
+
+def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, customer_email: str, quantity: int = 1) -> str:
+    """Flutterwave's Standard Checkout: a single POST returns a hosted
+    payment link, same shape as Paystack's initialize call.
+
+    quantity == 1 (the default) is an ordinary recurring subscription: the
+    plan reference is passed as `payment_plan` so Flutterwave handles the
+    recurring billing itself, same as before.
+
+    quantity > 1 is genuinely different — a customer paying for, say, 3
+    months up front isn't subscribing to a recurring plan at that rate;
+    they're making a one-time payment covering 3 real months of access.
+    So `payment_plan` is deliberately omitted (this is NOT recurring),
+    the amount is the base price multiplied by quantity, and `quantity` +
+    `cycle` travel in `meta` so the webhook can calculate exactly when
+    this purchase's access should lapse if it isn't renewed."""
+    if cycle not in CYCLE_KEYS:
+        raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
+    if quantity < 1:
+        raise BillingNotConfigured("Quantity must be at least 1.")
+    catalog = PLAN_CATALOG[plan]
+    price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
+    base_price = catalog[price_key]
+    tx_ref = f"blens-{org.id}-{plan}-{cycle}-{int(now_utc().timestamp())}"
+    return _flutterwave_initiate_payment(
+        tx_ref=tx_ref, amount=round(base_price * quantity, 2),
+        redirect_url=f"{APP_URL}/billing/success", customer_email=customer_email,
+        meta={"organization_id": org.id, "plan": plan, "cycle": cycle, "quantity": quantity},
+        payment_plan=catalog[flutterwave_key] if quantity == 1 else None,
+    )
 
 
 def verify_paystack_signature(payload: bytes, signature_header: str) -> bool:
@@ -253,25 +300,42 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
     etype = event.get("event", "")
     meta = data.get("meta") or {}
     org_id, plan = meta.get("organization_id"), meta.get("plan")
+    pending_signup_id = meta.get("pending_signup_id")
     cycle, quantity = meta.get("cycle", "annual"), int(meta.get("quantity", 1))
 
     if etype == "charge.completed" and data.get("status") == "successful":
         # Defense in depth, per Flutterwave's own guidance: the webhook
         # signature only proves the request came from Flutterwave, not that
         # this specific transaction is genuinely real — re-verify server-side
-        # before ever activating anything.
+        # before ever activating anything, or creating any account at all.
         verified = _verify_flutterwave_transaction(str(data.get("id", "")), data.get("amount", 0), data.get("currency", "USD"))
         if verified:
-            # quantity 1 is an ordinary recurring plan (paid_until stays
-            # None — the provider's own subscription is the source of
-            # truth for renewal). quantity > 1 was a one-time payment for
-            # a specific number of periods, so the access window has to be
-            # tracked here instead of relying on any subscription.
             paid_until = (now_utc() + timedelta(days=CYCLE_DAYS.get(cycle, 365) * quantity)) if quantity > 1 else None
-            _activate_plan(db, org_id, plan, "flutterwave", str(data.get("customer", {}).get("id", "")),
-                           str(data.get("id", "")), paid_until=paid_until)
+            if pending_signup_id:
+                # Pay-first signup: the account doesn't exist yet — this is
+                # the one place it actually gets created, only now that
+                # payment is genuinely confirmed. Safe to call more than
+                # once (e.g. a retried webhook): completed_token being
+                # already set is treated as "already handled."
+                from . import auth
+                pending = db.get(PendingSignup, pending_signup_id)
+                if pending and not pending.completed_token:
+                    try:
+                        member, token = auth.create_account_from_pending_signup(db, pending, paid_until=paid_until)
+                        pending.completed_token = token
+                        pending.completed_member_id = member.id
+                        org_id = member.organization_id
+                        db.commit()
+                    except Exception:  # noqa: BLE001 — a failure here must never silently swallow a real payment
+                        log.exception("Failed to create account from pending signup %s after confirmed payment", pending_signup_id)
+                elif pending:
+                    org_id = db.get(OrgMember, pending.completed_member_id).organization_id if pending.completed_member_id else org_id
+            else:
+                _activate_plan(db, org_id, plan, "flutterwave", str(data.get("customer", {}).get("id", "")),
+                               str(data.get("id", "")), paid_until=paid_until)
         else:
-            log.warning("Flutterwave webhook claimed success but server-side verification disagreed — plan NOT activated for org %s", org_id)
+            log.warning("Flutterwave webhook claimed success but server-side verification disagreed — nothing activated or created for %s",
+                       pending_signup_id or org_id)
 
     db.add(BillingEvent(organization_id=org_id or "", provider="flutterwave", event_type=etype, raw=json.dumps(event)[:8000]))
     db.commit()
