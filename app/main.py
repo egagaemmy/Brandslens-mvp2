@@ -23,7 +23,8 @@ from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention,
-                     EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber, now_utc, aware)
+                     EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber,
+                     PushSubscription, now_utc, aware)
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -287,6 +288,7 @@ def get_workspace(ws: Workspace = Depends(owned_workspace), db: Session = Depend
            "brand_tokens": ws.brand_tokens, "keywords": ws.keywords, "rss_feeds": ws.rss_feeds,
            "brand_domains": ws.brand_domains, "telegram_channels": ws.telegram_channels,
            "reddit_subreddits": ws.reddit_subreddits, "youtube_query": ws.youtube_query,
+           "slack_webhook_url": ws.slack_webhook_url,
            "incidents": [_inc_dict(i) for i in incidents]}
 
 
@@ -298,6 +300,7 @@ class WorkspaceUpdateBody(BaseModel):
     telegram_channels: list[str] | None = None
     reddit_subreddits: list[str] | None = None
     youtube_query: str | None = None
+    slack_webhook_url: str | None = None
 
 
 @app.patch("/api/workspaces/{ws_id}")
@@ -724,7 +727,7 @@ class CheckoutBody(BaseModel):
 
 @app.post("/api/billing/checkout")
 def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role("owner", "lead")), db: Session = Depends(get_db)) -> dict:
-    if body.plan not in billing.PLAN_CATALOG:
+    if body.plan not in billing.get_plan_catalog(db):
         raise HTTPException(422, "Unknown plan")
     max_quantity = {"daily": 90, "monthly": 24, "annual": 5}.get(body.cycle, 12)
     if body.quantity < 1 or body.quantity > max_quantity:
@@ -732,11 +735,11 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
     org = db.get(Organization, member.organization_id)
     try:
         if body.provider == "stripe":
-            url = billing.create_stripe_checkout(org, body.plan, body.cycle, member.email)
+            url = billing.create_stripe_checkout(db, org, body.plan, body.cycle, member.email)
         elif body.provider == "paystack":
-            url = billing.create_paystack_checkout(org, body.plan, body.cycle, member.email)
+            url = billing.create_paystack_checkout(db, org, body.plan, body.cycle, member.email)
         elif body.provider == "flutterwave":
-            url = billing.create_flutterwave_checkout(org, body.plan, body.cycle, member.email, body.quantity, body.pay_in_ngn)
+            url = billing.create_flutterwave_checkout(db, org, body.plan, body.cycle, member.email, body.quantity, body.pay_in_ngn)
         else:
             raise HTTPException(422, "provider must be 'stripe', 'paystack', or 'flutterwave'")
     except BillingNotConfigured as e:
@@ -745,12 +748,11 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
 
 
 @app.get("/api/billing/ngn-rate")
-def get_ngn_rate() -> dict:
+def get_ngn_rate(db: Session = Depends(get_db)) -> dict:
     """Public — lets the frontend show an accurate converted NGN price
     before checkout, rather than hardcoding a rate that could drift out
     of sync with what the backend actually charges."""
-    from .config import NGN_PER_USD_RATE
-    return {"rate": NGN_PER_USD_RATE}
+    return {"rate": billing.get_ngn_rate(db)}
 
 
 class PendingCheckoutBody(BaseModel):
@@ -791,7 +793,7 @@ def start_pending_checkout(body: PendingCheckoutBody, db: Session = Depends(get_
     db.add(pending)
     db.flush()
     try:
-        url, tx_ref = billing.create_flutterwave_checkout_for_signup(pending.id, body.plan, body.cycle, body.quantity, body.email, body.pay_in_ngn)
+        url, tx_ref = billing.create_flutterwave_checkout_for_signup(db, pending.id, body.plan, body.cycle, body.quantity, body.email, body.pay_in_ngn)
     except BillingNotConfigured as e:
         db.rollback()
         raise HTTPException(409, str(e))
@@ -919,6 +921,67 @@ def update_my_profile(body: ProfileUpdateBody, member: OrgMember = Depends(curre
     except AuthError as e:
         raise HTTPException(422, str(e))
     return {"ok": True, "member": _member_dict(member)}
+
+
+class NotificationPreferencesBody(BaseModel):
+    email_alerts_enabled: bool
+
+
+@app.get("/api/me/notification-preferences")
+def get_my_notification_preferences(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+    push_count = db.scalar(select(func.count()).select_from(PushSubscription).where(PushSubscription.member_id == member.id)) or 0
+    return {"email_alerts_enabled": member.email_alerts_enabled, "push_subscriptions_active": push_count}
+
+
+@app.patch("/api/me/notification-preferences")
+def update_my_notification_preferences(body: NotificationPreferencesBody, member: OrgMember = Depends(current_member),
+                                       db: Session = Depends(get_db)) -> dict:
+    member.email_alerts_enabled = body.email_alerts_enabled
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/push/vapid-public-key")
+def get_vapid_public_key() -> dict:
+    """Public — the browser needs this to even begin a subscription
+    request; it's meant to be public (that's the whole design of VAPID,
+    unlike the matching private key, which never leaves the server)."""
+    from .config import VAPID_PUBLIC_KEY
+    return {"public_key": VAPID_PUBLIC_KEY}
+
+
+class PushSubscribeBody(BaseModel):
+    endpoint: str
+    p256dh_key: str
+    auth_key: str
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(body: PushSubscribeBody, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+    existing = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == body.endpoint))
+    if existing:
+        existing.member_id = member.id
+        existing.p256dh_key = body.p256dh_key
+        existing.auth_key = body.auth_key
+    else:
+        db.add(PushSubscription(member_id=member.id, endpoint=body.endpoint,
+                                p256dh_key=body.p256dh_key, auth_key=body.auth_key))
+    db.commit()
+    return {"ok": True}
+
+
+class PushUnsubscribeBody(BaseModel):
+    endpoint: str
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(body: PushUnsubscribeBody, member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+    existing = db.scalar(select(PushSubscription).where(
+        PushSubscription.endpoint == body.endpoint, PushSubscription.member_id == member.id))
+    if existing:
+        db.delete(existing)
+        db.commit()
+    return {"ok": True}
 
 
 # ==================================================================
@@ -1220,11 +1283,11 @@ def setup_seed_blog(secret: str, db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/api/enterprise-inquiry")
-def enterprise_inquiry(body: EnterpriseInquiryBody) -> dict:
+def enterprise_inquiry(body: EnterpriseInquiryBody, db: Session = Depends(get_db)) -> dict:
     """Public, unauthenticated — this is the entire 'checkout flow' for
     Enterprise, since there's no fixed price to charge a card against."""
     from .services.billing import submit_enterprise_inquiry
-    sent = submit_enterprise_inquiry(body.name, body.designation, body.email, body.company,
+    sent = submit_enterprise_inquiry(db, body.name, body.designation, body.email, body.company,
                                      body.message, body.preferred_meeting_time)
     return {"ok": True, "sent": sent}
 
@@ -1317,15 +1380,19 @@ table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #E2E8F0;pad
 
 
 @app.get("/legal/terms", response_class=HTMLResponse)
-def legal_terms() -> str:
+def legal_terms(db: Session = Depends(get_db)) -> str:
     from .legal_content import TERMS_OF_SERVICE
-    return _render_legal_page(TERMS_OF_SERVICE, "Terms of Service")
+    from .services.settings import get_setting
+    content = get_setting(db, "legal:terms_of_service", TERMS_OF_SERVICE)
+    return _render_legal_page(content, "Terms of Service")
 
 
 @app.get("/legal/privacy", response_class=HTMLResponse)
-def legal_privacy() -> str:
+def legal_privacy(db: Session = Depends(get_db)) -> str:
     from .legal_content import PRIVACY_POLICY
-    return _render_legal_page(PRIVACY_POLICY, "Privacy Policy")
+    from .services.settings import get_setting
+    content = get_setting(db, "legal:privacy_policy", PRIVACY_POLICY)
+    return _render_legal_page(content, "Privacy Policy")
 
 
 # ==================================================================
@@ -1455,6 +1522,129 @@ def _require_exempt(member: OrgMember, db: Session) -> None:
     org = db.get(Organization, member.organization_id)
     if org.billing_status != "exempt":
         raise HTTPException(403, "The blog is managed by the BrandsLens team.")
+
+
+class PricingUpdateBody(BaseModel):
+    catalog: dict
+    ngn_per_usd_rate: float
+
+
+@app.get("/api/admin/pricing")
+def admin_get_pricing(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """The current effective pricing — DEFAULT_PLAN_CATALOG/NGN_PER_USD_RATE,
+    overlaid with anything already saved through this dashboard. Also
+    returns the hardcoded defaults separately, so the UI can show an admin
+    exactly what they'd be resetting to if they ever want to revert."""
+    _require_exempt(member, db)
+    return {
+        "catalog": billing.get_plan_catalog(db),
+        "default_catalog": billing.DEFAULT_PLAN_CATALOG,
+        "ngn_per_usd_rate": billing.get_ngn_rate(db),
+        "default_ngn_per_usd_rate": billing.NGN_PER_USD_RATE,
+    }
+
+
+@app.put("/api/admin/pricing")
+def admin_update_pricing(body: PricingUpdateBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    for plan_key in ("standard", "growth", "professional"):
+        if plan_key not in body.catalog:
+            raise HTTPException(422, f"Missing plan: {plan_key}")
+    from .services.settings import set_setting
+    set_setting(db, "pricing:plan_catalog", body.catalog, member.email)
+    set_setting(db, "pricing:ngn_per_usd_rate", body.ngn_per_usd_rate, member.email)
+    return {"ok": True}
+
+
+class LegalDocumentBody(BaseModel):
+    content: str
+
+
+@app.get("/api/admin/legal/{doc_key}")
+def admin_get_legal_document(doc_key: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    if doc_key not in ("terms", "privacy"):
+        raise HTTPException(404, "Unknown legal document")
+    from .legal_content import TERMS_OF_SERVICE, PRIVACY_POLICY
+    from .services.settings import get_setting
+    default = TERMS_OF_SERVICE if doc_key == "terms" else PRIVACY_POLICY
+    return {"content": get_setting(db, f"legal:{'terms_of_service' if doc_key == 'terms' else 'privacy_policy'}", default),
+           "default_content": default}
+
+
+@app.put("/api/admin/legal/{doc_key}")
+def admin_update_legal_document(doc_key: str, body: LegalDocumentBody,
+                                member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    if doc_key not in ("terms", "privacy"):
+        raise HTTPException(404, "Unknown legal document")
+    from .services.settings import set_setting
+    setting_key = f"legal:{'terms_of_service' if doc_key == 'terms' else 'privacy_policy'}"
+    set_setting(db, setting_key, body.content, member.email)
+    return {"ok": True}
+
+
+EMAIL_TEMPLATE_REGISTRY = {
+    "welcome": {"label": "Welcome Email", "placeholders": ["{{first_name}}", "{{plan}}", "{{app_url}}"]},
+}
+
+
+class EmailTemplateBody(BaseModel):
+    subject: str
+    body_html: str
+
+
+@app.get("/api/admin/email-templates")
+def admin_list_email_templates(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> list[dict]:
+    _require_exempt(member, db)
+    from .services import mailer
+    from .services.settings import get_setting
+    out = []
+    for key, meta in EMAIL_TEMPLATE_REGISTRY.items():
+        default_subject = mailer.DEFAULT_WELCOME_SUBJECT if key == "welcome" else ""
+        default_body = mailer.DEFAULT_WELCOME_BODY if key == "welcome" else ""
+        out.append({
+            "key": key, "label": meta["label"], "placeholders": meta["placeholders"],
+            "subject": get_setting(db, f"email:{key}_subject", default_subject),
+            "body_html": get_setting(db, f"email:{key}_body", default_body),
+        })
+    return out
+
+
+@app.put("/api/admin/email-templates/{template_key}")
+def admin_update_email_template(template_key: str, body: EmailTemplateBody,
+                                member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    if template_key not in EMAIL_TEMPLATE_REGISTRY:
+        raise HTTPException(404, "Unknown email template")
+    from .services.settings import set_setting
+    set_setting(db, f"email:{template_key}_subject", body.subject, member.email)
+    set_setting(db, f"email:{template_key}_body", body.body_html, member.email)
+    return {"ok": True}
+
+
+@app.get("/api/admin/notifications")
+def admin_get_notification_settings(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    from .config import ENTERPRISE_INQUIRY_EMAIL
+    from .services.settings import get_setting
+    return {
+        "enterprise_inquiry_email": get_setting(db, "notifications:enterprise_inquiry_email", ENTERPRISE_INQUIRY_EMAIL),
+        "default_enterprise_inquiry_email": ENTERPRISE_INQUIRY_EMAIL,
+    }
+
+
+class NotificationSettingsBody(BaseModel):
+    enterprise_inquiry_email: str
+
+
+@app.put("/api/admin/notifications")
+def admin_update_notification_settings(body: NotificationSettingsBody,
+                                       member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    from .services.settings import set_setting
+    set_setting(db, "notifications:enterprise_inquiry_email", body.enterprise_inquiry_email, member.email)
+    return {"ok": True}
 
 
 @app.get("/api/admin/blog/posts")

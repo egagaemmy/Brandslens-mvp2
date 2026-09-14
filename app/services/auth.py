@@ -193,7 +193,7 @@ def create_account_from_pending_signup(db: Session, pending: PendingSignup, paid
     db.commit()
 
     from .mailer import send_welcome_email
-    send_welcome_email(owner.email, owner.name, pending.plan)
+    send_welcome_email(db, owner.email, owner.name, pending.plan)
 
     token = issue_session(db, owner)
     return owner, token

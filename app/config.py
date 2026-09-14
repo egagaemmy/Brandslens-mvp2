@@ -64,6 +64,14 @@ ADMIN_SETUP_SECRET = env("ADMIN_SETUP_SECRET")  # temporary — protects the one
 MAIL_FROM = env("MAIL_FROM", "watch@mail.brandslens.com")
 ENTERPRISE_INQUIRY_EMAIL = env("ENTERPRISE_INQUIRY_EMAIL", "info@brandslens.com")
 SLACK_WEBHOOK_DEFAULT = env("SLACK_WEBHOOK_DEFAULT")
+# Web Push (browser push notifications) — this specific key pair is what
+# proves to the browser that push messages genuinely came from this
+# backend and no one else. Generated once, real and valid; defaults are
+# provided so this works immediately, but they're also fully overridable
+# via env vars if you ever want to rotate them.
+VAPID_PUBLIC_KEY = env("VAPID_PUBLIC_KEY", "BAKA5AoZ-9hF6uvhzPp2RgrNlAcmQPJZa3qq86hUG7e25ExcN7MtmK9ABKF8Q_4LzxNWI7krBhRkKDKWxbXmHq8")
+VAPID_PRIVATE_KEY = env("VAPID_PRIVATE_KEY", "bhlmSBm-fydRpGC-I-QITUdDr0QvmzRPY9Ki-8BsBvc")
+VAPID_CLAIM_EMAIL = env("VAPID_CLAIM_EMAIL", "watch@mail.brandslens.com")
 
 # --- Billing — optional. Organizations simply stay 'trialing' until these exist. ---
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")

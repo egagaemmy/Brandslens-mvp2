@@ -24,7 +24,7 @@ from ..models import Organization, OrgMember, BillingEvent, PendingSignup, now_u
 
 log = logging.getLogger("billing")
 
-PLAN_CATALOG = {
+DEFAULT_PLAN_CATALOG = {
     "standard": {"annual_usd": 1500, "monthly_usd": 143.75, "daily_usd": 4.93,
                 "stripe_price_annual": "price_standard_annual", "stripe_price_monthly": "price_standard_monthly",
                 "stripe_price_daily": "price_standard_daily",
@@ -50,6 +50,29 @@ PLAN_CATALOG = {
     # check out against. It's handled entirely by submit_enterprise_inquiry()
     # below, which emails a real conversation instead of charging a card.
 }
+
+
+def get_ngn_rate(db: Session) -> float:
+    """The effective NGN/USD rate — the fixed NGN_PER_USD_RATE env value,
+    overlaid with whatever a platform admin has actually saved through
+    the Super Admin dashboard. Same safe-override pattern as
+    get_plan_catalog: nothing changes until someone edits it."""
+    from .settings import get_setting
+    override = get_setting(db, "pricing:ngn_per_usd_rate", None)
+    return float(override) if override is not None else NGN_PER_USD_RATE
+
+
+def get_plan_catalog(db: Session) -> dict:
+    """The effective plan catalog — DEFAULT_PLAN_CATALOG, overlaid with
+    whatever a platform admin has actually saved through the Super Admin
+    dashboard. Nothing here changes until someone edits a price or a
+    provider ID through that screen; until then, this returns exactly the
+    same hardcoded values the app always had."""
+    from .settings import get_setting
+    override = get_setting(db, "pricing:plan_catalog")
+    if override:
+        return override
+    return DEFAULT_PLAN_CATALOG
 CYCLE_KEYS = {"annual": ("annual_usd", "stripe_price_annual", "paystack_plan_annual", "flutterwave_plan_annual"),
              "monthly": ("monthly_usd", "stripe_price_monthly", "paystack_plan_monthly", "flutterwave_plan_monthly"),
              "daily": ("daily_usd", "stripe_price_daily", "paystack_plan_daily", "flutterwave_plan_daily")}
@@ -62,23 +85,23 @@ class BillingNotConfigured(Exception):
     state at MVP stage, not a bug."""
 
 
-def submit_enterprise_inquiry(name: str, designation: str, email: str, company: str,
+def submit_enterprise_inquiry(db: Session, name: str, designation: str, email: str, company: str,
                               message: str, preferred_meeting_time: str) -> bool:
     """Enterprise has no fixed price — 'checkout' for this tier is a real
     conversation, not a card charge. This emails the inquiry directly rather
     than creating any billing record at all."""
     from .mailer import send_enterprise_inquiry
-    return send_enterprise_inquiry(name, designation, email, company, message, preferred_meeting_time)
+    return send_enterprise_inquiry(db, name, designation, email, company, message, preferred_meeting_time)
 
 
-def create_stripe_checkout(org: Organization, plan: str, cycle: str, customer_email: str) -> str:
+def create_stripe_checkout(db: Session, org: Organization, plan: str, cycle: str, customer_email: str) -> str:
     if not STRIPE_SECRET_KEY:
         raise BillingNotConfigured("Stripe isn't connected yet — please try again shortly or contact support.")
     if cycle not in CYCLE_KEYS:
         raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
     import stripe
     stripe.api_key = STRIPE_SECRET_KEY
-    catalog = PLAN_CATALOG[plan]
+    catalog = get_plan_catalog(db)[plan]
     _, stripe_key, _, _ = CYCLE_KEYS[cycle]
     price_id = catalog[stripe_key]
     session = stripe.checkout.Session.create(
@@ -91,12 +114,12 @@ def create_stripe_checkout(org: Organization, plan: str, cycle: str, customer_em
     return session.url
 
 
-def create_paystack_checkout(org: Organization, plan: str, cycle: str, customer_email: str) -> str:
+def create_paystack_checkout(db: Session, org: Organization, plan: str, cycle: str, customer_email: str) -> str:
     if not PAYSTACK_SECRET_KEY:
         raise BillingNotConfigured("Paystack isn't connected yet — please try again shortly or contact support.")
     if cycle not in CYCLE_KEYS:
         raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
-    catalog = PLAN_CATALOG[plan]
+    catalog = get_plan_catalog(db)[plan]
     _, _, paystack_key, _ = CYCLE_KEYS[cycle]
     plan_code = catalog[paystack_key]
     resp = httpx.post("https://api.paystack.co/transaction/initialize",
@@ -154,7 +177,7 @@ def _flutterwave_initiate_payment(tx_ref: str, amount: float, redirect_url: str,
 MAX_QUANTITY = {"daily": 90, "monthly": 24, "annual": 5}
 
 
-def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: str, quantity: int, customer_email: str,
+def create_flutterwave_checkout_for_signup(db: Session, pending_id: str, plan: str, cycle: str, quantity: int, customer_email: str,
                                            pay_in_ngn: bool = False) -> tuple[str, str]:
     """The pay-first equivalent of create_flutterwave_checkout — for a
     prospect who doesn't have an account yet. No Organization exists at
@@ -178,13 +201,13 @@ def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: st
         raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
     if quantity < 1 or quantity > MAX_QUANTITY.get(cycle, 1):
         raise BillingNotConfigured(f"Quantity must be between 1 and {MAX_QUANTITY.get(cycle, 1)} for {cycle} billing.")
-    catalog = PLAN_CATALOG[plan]
+    catalog = get_plan_catalog(db)[plan]
     price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
     base_price = catalog[price_key]
     tx_ref = f"blens-signup-{pending_id}-{int(now_utc().timestamp())}"
     if pay_in_ngn:
         url = _flutterwave_initiate_payment(
-            tx_ref=tx_ref, amount=round(base_price * quantity * NGN_PER_USD_RATE, 2),
+            tx_ref=tx_ref, amount=round(base_price * quantity * get_ngn_rate(db), 2),
             redirect_url=f"{APP_URL}/signup/complete?tx_ref={tx_ref}", customer_email=customer_email,
             meta={"pending_signup_id": pending_id, "plan": plan, "cycle": cycle, "quantity": quantity, "one_time": True},
             payment_plan=None, currency="NGN", payment_options="card, banktransfer, ussd, account",
@@ -199,7 +222,7 @@ def create_flutterwave_checkout_for_signup(pending_id: str, plan: str, cycle: st
     return url, tx_ref
 
 
-def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, customer_email: str,
+def create_flutterwave_checkout(db: Session, org: Organization, plan: str, cycle: str, customer_email: str,
                                 quantity: int = 1, pay_in_ngn: bool = False) -> str:
     """Flutterwave's Standard Checkout: a single POST returns a hosted
     payment link, same shape as Paystack's initialize call.
@@ -234,13 +257,13 @@ def create_flutterwave_checkout(org: Organization, plan: str, cycle: str, custom
         raise BillingNotConfigured("Billing cycle must be 'annual', 'monthly', or 'daily'.")
     if quantity < 1:
         raise BillingNotConfigured("Quantity must be at least 1.")
-    catalog = PLAN_CATALOG[plan]
+    catalog = get_plan_catalog(db)[plan]
     price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
     base_price = catalog[price_key]
     tx_ref = f"blens-{org.id}-{plan}-{cycle}-{int(now_utc().timestamp())}"
     if pay_in_ngn:
         return _flutterwave_initiate_payment(
-            tx_ref=tx_ref, amount=round(base_price * quantity * NGN_PER_USD_RATE, 2),
+            tx_ref=tx_ref, amount=round(base_price * quantity * get_ngn_rate(db), 2),
             redirect_url=f"{APP_URL}/billing/success", customer_email=customer_email,
             meta={"organization_id": org.id, "plan": plan, "cycle": cycle, "quantity": quantity, "one_time": True},
             payment_plan=None, currency="NGN", payment_options="card, banktransfer, ussd, account",
@@ -415,7 +438,7 @@ def _activate_plan(db: Session, org_id: str, plan: str, provider: str, customer_
         owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org_id, OrgMember.role == "owner"))
         if owner:
             from .mailer import send_welcome_email
-            send_welcome_email(owner.email, owner.name, plan)
+            send_welcome_email(db, owner.email, owner.name, plan)
 
 
 def _flag_payment_issue(db: Session, org_id: str) -> None:

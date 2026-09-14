@@ -9,11 +9,12 @@ import logging
 from datetime import datetime, timezone
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from ..models import Workspace, Incident
+from ..config import APP_URL
+from ..models import Workspace, Incident, OrgMember, PushSubscription
 from .classifier import classify_batch
 from .dedup import content_hash, find_near_duplicate
 from . import media_room
-from .mailer import slack_alert
+from .mailer import slack_alert, send_mention_alert_email, send_push_notification
 
 log = logging.getLogger("pipeline")
 
@@ -67,6 +68,39 @@ def _next_ref(db: Session, ws: Workspace) -> str:
     return f"{prefix}-{1000 + n + 1}"
 
 
+def _notify_workspace_members(db: Session, ws: Workspace, inc: Incident) -> None:
+    """Email + push fan-out for a genuinely new HIGH/MEDIUM mention — one
+    notification per opted-in member, not one per workspace, since
+    different people on the same team may have different preferences.
+    Email is attempted for every member with alerts enabled (the reliable
+    channel meant to reach everyone); push is attempted only for members
+    who've actually granted browser permission and have a live
+    subscription. A failure in either channel, for any one member, must
+    never stop the others from being notified — hence the per-member,
+    per-channel try/except rather than one wrapped around the whole loop."""
+    members = db.scalars(select(OrgMember).where(OrgMember.organization_id == ws.organization_id)).all()
+    incident_url = f"{APP_URL}/incidents?ref={inc.ref}"
+    for member in members:
+        if member.email_alerts_enabled:
+            try:
+                send_mention_alert_email(db, member.email, member.name, inc.severity, ws.name,
+                                        inc.platform, inc.title[:200], incident_url)
+            except Exception:  # noqa: BLE001 — one member's email failure must never block anyone else's
+                log.exception("Mention alert email failed for %s", member.email)
+        subs = db.scalars(select(PushSubscription).where(PushSubscription.member_id == member.id)).all()
+        for sub in subs:
+            try:
+                sent = send_push_notification(sub.endpoint, sub.p256dh_key, sub.auth_key,
+                                              f"{inc.severity} mention — {ws.name}", inc.title[:150], incident_url)
+                if not sent:
+                    # A dead/expired subscription — remove it rather than
+                    # retry it forever on every future incident.
+                    db.delete(sub)
+                    db.commit()
+            except Exception:  # noqa: BLE001
+                log.exception("Push notification failed for member %s", member.id)
+
+
 def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source: str, found_historically: bool = False) -> dict:
     """candidates: [{"text","url","author","platform","posted_at"(datetime|None),"reach"}]"""
     survivors_with_keywords = [(c, _matching_keywords(ws, c["text"])) for c in candidates]
@@ -118,11 +152,15 @@ def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source
         if inc.severity == "HIGH":
             high += 1
             case = media_room.open_case(db, inc)
-            slack_alert(f":rotating_light: HIGH — {ws.name}\n{inc.ref} · {inc.platform} · {inc.title[:200]}\n{inc.url}")
+            slack_alert(f":rotating_light: HIGH — {ws.name}\n{inc.ref} · {inc.platform} · {inc.title[:200]}\n{inc.url}",
+                       webhook=ws.slack_webhook_url)
+            _notify_workspace_members(db, ws, inc)
             log.info("Opened Media Room case %s for %s", case.id, inc.ref)
         elif inc.severity == "MEDIUM":
             case = media_room.open_case(db, inc)
-            slack_alert(f":warning: MEDIUM — {ws.name}\n{inc.ref} · {inc.platform} · {inc.title[:200]}\n{inc.url}")
+            slack_alert(f":warning: MEDIUM — {ws.name}\n{inc.ref} · {inc.platform} · {inc.title[:200]}\n{inc.url}",
+                       webhook=ws.slack_webhook_url)
+            _notify_workspace_members(db, ws, inc)
             log.info("Opened Media Room case %s for %s", case.id, inc.ref)
 
     db.commit()

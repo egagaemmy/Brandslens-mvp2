@@ -95,6 +95,7 @@ class OrgMember(Base):
     city: Mapped[str] = mapped_column(String(120), default="")
     country: Mapped[str] = mapped_column(String(120), default="")
     job_title: Mapped[str] = mapped_column(String(160), default="")
+    email_alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     organization: Mapped["Organization"] = relationship(back_populates="members")
 
@@ -126,6 +127,22 @@ class PasswordResetToken(Base):
     used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class AppSetting(Base):
+    """A generic, admin-editable settings store — anything that would
+    otherwise sit as a fixed value in the code (a price, a rate, an email
+    address, a full page of legal text) lives here instead, once an admin
+    has actually edited it. get_setting() falls back to the code's own
+    hardcoded default when a key has never been set, so nothing breaks
+    for values nobody has touched yet — this is additive, not a
+    replacement for sensible defaults."""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    updated_by: Mapped[str] = mapped_column(String(320), default="")
 
 
 class PendingSignup(Base):
@@ -171,6 +188,24 @@ class SessionToken(Base):
     revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PushSubscription(Base):
+    """One browser's Web Push subscription for one member. A member can have
+    more than one (they might have granted permission on both their laptop
+    and their phone) — each is a separate row, and each gets its own push
+    attempt when an alert fires. If sending to a given endpoint ever fails
+    with an "expired/gone" response, that specific row should be deleted
+    rather than the whole feature disabled — browsers rotate these
+    periodically, that's expected, not an error worth alarming over."""
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    member_id: Mapped[str] = mapped_column(ForeignKey("org_members.id"), index=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh_key: Mapped[str] = mapped_column(String(200))
+    auth_key: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class BillingEvent(Base):
     """Append-only log of every webhook received, so a billing dispute or a
     'why did my plan change' ticket can always be traced to the exact event."""
@@ -198,6 +233,7 @@ class Workspace(Base):
     rss_feeds: Mapped[list] = mapped_column(JSON, default=list)
     brand_domains: Mapped[list] = mapped_column(JSON, default=list)   # official domains, for typosquat comparison
     telegram_channels: Mapped[list] = mapped_column(JSON, default=list)
+    slack_webhook_url: Mapped[str] = mapped_column(String(500), default="")  # this workspace's own destination — never shared across customers
     reddit_subreddits: Mapped[list] = mapped_column(JSON, default=list)
     youtube_query: Mapped[str] = mapped_column(String(300), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
