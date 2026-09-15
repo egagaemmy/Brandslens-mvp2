@@ -8,6 +8,7 @@ file is the fix.
 """
 from __future__ import annotations
 import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
@@ -1621,6 +1622,35 @@ def admin_update_email_template(template_key: str, body: EmailTemplateBody,
     set_setting(db, f"email:{template_key}_subject", body.subject, member.email)
     set_setting(db, f"email:{template_key}_body", body.body_html, member.email)
     return {"ok": True}
+
+
+@app.get("/api/setup/recover-pending-signup")
+def setup_recover_pending_signup(tx_ref: str, secret: str, db: Session = Depends(get_db)) -> dict:
+    """The same recovery as the admin-only POST version below, but gated
+    by the setup secret and reachable as a plain URL — usable in an
+    urgent moment without needing to dig a bearer token out of browser
+    storage first."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    return billing.recover_pending_signup_by_tx_ref(db, tx_ref)
+
+
+class RecoverSignupBody(BaseModel):
+    tx_ref: str
+
+
+@app.post("/api/admin/recover-pending-signup")
+def admin_recover_pending_signup(body: RecoverSignupBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """A manual escape hatch for exactly one real situation: a customer's
+    payment genuinely succeeded on Flutterwave, but the webhook that's
+    supposed to create their account either never arrived or failed —
+    this independently re-verifies the payment with Flutterwave directly
+    and creates the account if that verification genuinely confirms
+    success, so a real paying customer never stays stuck because of an
+    infrastructure hiccup on either side."""
+    _require_exempt(member, db)
+    result = billing.recover_pending_signup_by_tx_ref(db, body.tx_ref)
+    return result
 
 
 @app.get("/api/admin/notifications")

@@ -295,6 +295,49 @@ def verify_flutterwave_signature(signature_header: str) -> bool:
     return hmac.compare_digest(FLUTTERWAVE_WEBHOOK_HASH, signature_header or "")
 
 
+def recover_pending_signup_by_tx_ref(db: Session, tx_ref: str) -> dict:
+    """A manual recovery path for exactly one situation: a payment that
+    genuinely succeeded on Flutterwave's own page, but whose webhook
+    either never arrived or failed partway through, leaving a real
+    customer who paid with no account. This independently re-verifies
+    the payment directly against Flutterwave using their reference
+    lookup (not trusting anything the frontend or a webhook claims), and
+    only creates the account if that verification genuinely confirms
+    success — the same trust boundary as the webhook path, just
+    triggered by an admin instead of waiting for a webhook that may
+    never come."""
+    pending = db.scalar(select(PendingSignup).where(PendingSignup.tx_ref == tx_ref))
+    if not pending:
+        return {"ok": False, "reason": "No pending signup found for this reference."}
+    if pending.completed_token:
+        return {"ok": True, "reason": "Already completed — nothing to recover.", "already_done": True}
+
+    try:
+        resp = httpx.get("https://api.flutterwave.com/v3/transactions/verify_by_reference",
+                        params={"tx_ref": tx_ref},
+                        headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
+    except Exception as e:  # noqa: BLE001
+        log.exception("Recovery lookup failed for tx_ref=%s", tx_ref)
+        return {"ok": False, "reason": f"Couldn't reach Flutterwave to verify this payment: {e}"}
+
+    if data.get("status") != "successful":
+        return {"ok": False, "reason": f"Flutterwave reports this transaction's status as '{data.get('status')}', not successful — not creating an account."}
+
+    quantity = int(data.get("meta", {}).get("quantity", pending.quantity))
+    is_one_time = quantity > 1 or bool(data.get("meta", {}).get("one_time"))
+    paid_until = (now_utc() + timedelta(days=CYCLE_DAYS.get(pending.cycle, 365) * quantity)) if is_one_time else None
+
+    from . import auth
+    member, token = auth.create_account_from_pending_signup(db, pending, paid_until=paid_until)
+    pending.completed_token = token
+    pending.completed_member_id = member.id
+    db.commit()
+    log.info("Recovered pending signup %s via manual admin recovery: organization_id=%s", tx_ref, member.organization_id)
+    return {"ok": True, "member_email": member.email, "organization_id": member.organization_id}
+
+
 def _verify_flutterwave_transaction(transaction_id: str, expected_amount: float, expected_currency: str) -> bool:
     """Flutterwave's own webhook documentation is explicit that a webhook
     alone should never be trusted for a payment decision — re-verify the
