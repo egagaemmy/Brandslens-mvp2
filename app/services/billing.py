@@ -10,6 +10,7 @@ Stripe/Paystack/Flutterwave accounts exist, without changing anything else.
 from __future__ import annotations
 import hashlib
 import hmac
+import re
 import json
 import logging
 from datetime import timedelta
@@ -403,6 +404,31 @@ def handle_paystack_webhook(db: Session, payload: bytes, signature_header: str) 
     return {"received": True}
 
 
+_TX_REF_SIGNUP_RE = re.compile(r"^blens-signup-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-\d+$")
+_TX_REF_ORG_RE = re.compile(r"^blens-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(standard|growth|professional)-(annual|monthly|daily)-\d+$")
+
+
+def _recover_from_tx_ref(tx_ref: str) -> dict:
+    """Flutterwave is expected to echo back the custom `meta` we send at
+    checkout, but in practice this has been observed to come back as an
+    empty object on a real, successful webhook — even with "Add meta to
+    webhook" enabled on their dashboard. Rather than depend entirely on
+    that, every tx_ref this app generates already has the identifying
+    info baked directly into its own string (see create_flutterwave_checkout
+    and create_flutterwave_checkout_for_signup) — this recovers it from
+    there when meta comes back empty, so a real payment never gets lost
+    to an unreliable echo of data we already embedded ourselves."""
+    if not tx_ref:
+        return {}
+    m = _TX_REF_SIGNUP_RE.match(tx_ref)
+    if m:
+        return {"pending_signup_id": m.group(1)}
+    m = _TX_REF_ORG_RE.match(tx_ref)
+    if m:
+        return {"organization_id": m.group(1), "plan": m.group(2), "cycle": m.group(3)}
+    return {}
+
+
 def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: str) -> dict:
     if not verify_flutterwave_signature(signature_header):
         raise PermissionError("invalid_flutterwave_signature")
@@ -410,11 +436,17 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
     data = event.get("data", {})
     etype = event.get("event", "")
     meta = data.get("meta") or {}
-    org_id, plan = meta.get("organization_id"), meta.get("plan")
-    pending_signup_id = meta.get("pending_signup_id")
-    cycle, quantity = meta.get("cycle", "annual"), int(meta.get("quantity", 1))
-    log.info("Flutterwave webhook received: event=%s status=%s tx_ref=%s meta=%s",
-             etype, data.get("status"), data.get("tx_ref"), meta)
+    tx_ref = data.get("tx_ref", "")
+    recovered = {} if (meta.get("pending_signup_id") or meta.get("organization_id")) else _recover_from_tx_ref(tx_ref)
+    if recovered:
+        log.info("Flutterwave meta was empty/unusable for tx_ref=%s — recovered %s directly from the reference instead", tx_ref, recovered)
+    org_id = meta.get("organization_id") or recovered.get("organization_id")
+    plan = meta.get("plan") or recovered.get("plan")
+    pending_signup_id = meta.get("pending_signup_id") or recovered.get("pending_signup_id")
+    cycle = meta.get("cycle") or recovered.get("cycle") or "annual"
+    quantity = int(meta.get("quantity", 1))
+    log.info("Flutterwave webhook received: event=%s status=%s tx_ref=%s raw_meta=%s effective(org_id=%s plan=%s pending_signup_id=%s cycle=%s)",
+             etype, data.get("status"), tx_ref, meta, org_id, plan, pending_signup_id, cycle)
 
     if etype == "charge.completed" and data.get("status") == "successful":
         # Defense in depth, per Flutterwave's own guidance: the webhook
