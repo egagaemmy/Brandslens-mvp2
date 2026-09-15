@@ -370,6 +370,8 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
     org_id, plan = meta.get("organization_id"), meta.get("plan")
     pending_signup_id = meta.get("pending_signup_id")
     cycle, quantity = meta.get("cycle", "annual"), int(meta.get("quantity", 1))
+    log.info("Flutterwave webhook received: event=%s status=%s tx_ref=%s meta=%s",
+             etype, data.get("status"), data.get("tx_ref"), meta)
 
     if etype == "charge.completed" and data.get("status") == "successful":
         # Defense in depth, per Flutterwave's own guidance: the webhook
@@ -377,6 +379,7 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
         # this specific transaction is genuinely real — re-verify server-side
         # before ever activating anything, or creating any account at all.
         verified = _verify_flutterwave_transaction(str(data.get("id", "")), data.get("amount", 0), data.get("currency", "USD"))
+        log.info("Flutterwave server-side transaction verification for id=%s: %s", data.get("id"), verified)
         if verified:
             is_one_time = quantity > 1 or bool(meta.get("one_time"))
             paid_until = (now_utc() + timedelta(days=CYCLE_DAYS.get(cycle, 365) * quantity)) if is_one_time else None
@@ -388,16 +391,20 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
                 # already set is treated as "already handled."
                 from . import auth
                 pending = db.get(PendingSignup, pending_signup_id)
-                if pending and not pending.completed_token:
+                if not pending:
+                    log.error("Webhook meta named pending_signup_id=%s but no matching PendingSignup row exists — cannot create an account", pending_signup_id)
+                elif not pending.completed_token:
                     try:
                         member, token = auth.create_account_from_pending_signup(db, pending, paid_until=paid_until)
                         pending.completed_token = token
                         pending.completed_member_id = member.id
                         org_id = member.organization_id
                         db.commit()
+                        log.info("Real account created from pending signup %s: organization_id=%s", pending_signup_id, org_id)
                     except Exception:  # noqa: BLE001 — a failure here must never silently swallow a real payment
                         log.exception("Failed to create account from pending signup %s after confirmed payment", pending_signup_id)
-                elif pending:
+                else:
+                    log.info("Pending signup %s already completed previously — webhook retry, no action needed", pending_signup_id)
                     org_id = db.get(OrgMember, pending.completed_member_id).organization_id if pending.completed_member_id else org_id
             else:
                 _activate_plan(db, org_id, plan, "flutterwave", str(data.get("customer", {}).get("id", "")),
