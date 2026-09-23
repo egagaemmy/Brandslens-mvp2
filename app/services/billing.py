@@ -327,8 +327,13 @@ def recover_pending_signup_by_tx_ref(db: Session, tx_ref: str) -> dict:
         return {"ok": False, "reason": f"Flutterwave reports this transaction's status as '{data.get('status')}', not successful — not creating an account."}
 
     quantity = int(data.get("meta", {}).get("quantity", pending.quantity))
-    is_one_time = quantity > 1 or bool(data.get("meta", {}).get("one_time"))
-    paid_until = (now_utc() + timedelta(days=CYCLE_DAYS.get(pending.cycle, 365) * quantity)) if is_one_time else None
+    # Every successful charge — recurring or one-time — extends access by
+    # exactly one billing period from right now. This is what makes a
+    # subscription that silently stops renewing (a declined daily
+    # recharge, a cancelled plan Flutterwave never told us about) lapse
+    # naturally on schedule, rather than staying active forever just
+    # because it was activated once.
+    paid_until = now_utc() + timedelta(days=CYCLE_DAYS.get(pending.cycle, 365) * quantity)
 
     from . import auth
     member, token = auth.create_account_from_pending_signup(db, pending, paid_until=paid_until)
@@ -337,6 +342,48 @@ def recover_pending_signup_by_tx_ref(db: Session, tx_ref: str) -> dict:
     db.commit()
     log.info("Recovered pending signup %s via manual admin recovery: organization_id=%s", tx_ref, member.organization_id)
     return {"ok": True, "member_email": member.email, "organization_id": member.organization_id}
+
+
+def verify_stale_flutterwave_subscriptions(db: Session) -> dict:
+    """A safety net for accounts activated before paid_until was tracked
+    for every plan (see handle_flutterwave_webhook) — these are
+    currently active with no expiry ever set, relying entirely on
+    Flutterwave to eventually say something if billing lapses, which we
+    now know isn't reliable. For each one, this asks Flutterwave
+    directly what that customer's real subscription status is, and
+    revokes access immediately if it's no longer genuinely active.
+
+    Deliberately scoped to only paid_until IS NULL — an account that
+    already has a real expiry date is already correctly self-managing
+    via the webhook path and active_member's own check; this only
+    exists to catch the accounts that predate that fix."""
+    if not FLUTTERWAVE_SECRET_KEY:
+        return {"checked": 0, "revoked": 0}
+    stale = db.scalars(select(Organization).where(
+        Organization.billing_status == "active",
+        Organization.billing_provider == "flutterwave",
+        Organization.paid_until.is_(None),
+    )).all()
+    checked, revoked = 0, 0
+    for org in stale:
+        owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org.id, OrgMember.role == "owner"))
+        if not owner:
+            continue
+        checked += 1
+        try:
+            resp = httpx.get("https://api.flutterwave.com/v3/subscriptions", params={"email": owner.email},
+                            headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, timeout=15)
+            resp.raise_for_status()
+            subs = resp.json().get("data", [])
+        except Exception:  # noqa: BLE001 — a lookup failure must never itself revoke access; skip and try again next run
+            log.exception("Subscription verification lookup failed for org %s (%s)", org.id, owner.email)
+            continue
+        if subs and all(s.get("status") != "active" for s in subs):
+            org.billing_status = "unpaid"
+            db.commit()
+            revoked += 1
+            log.warning("Revoked access for organization %s (%s) — Flutterwave reports no active subscription", org.id, owner.email)
+    return {"checked": checked, "revoked": revoked}
 
 
 def _verify_flutterwave_transaction(transaction_id: str, expected_amount: float, expected_currency: str) -> bool:
@@ -456,8 +503,16 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
         verified = _verify_flutterwave_transaction(str(data.get("id", "")), data.get("amount", 0), data.get("currency", "USD"))
         log.info("Flutterwave server-side transaction verification for id=%s: %s", data.get("id"), verified)
         if verified:
-            is_one_time = quantity > 1 or bool(meta.get("one_time"))
-            paid_until = (now_utc() + timedelta(days=CYCLE_DAYS.get(cycle, 365) * quantity)) if is_one_time else None
+            # Every successful charge — recurring or one-time — extends
+            # access by exactly one billing period starting now. A
+            # recurring subscription that keeps renewing keeps pushing
+            # this further out on each webhook; one that silently stops
+            # renewing (a declined recharge, a cancelled plan Flutterwave
+            # never explicitly told us about) lapses naturally on
+            # schedule instead of staying active forever from a single
+            # activation. This deliberately no longer special-cases
+            # one-time purchases — every plan is tracked the same way.
+            paid_until = now_utc() + timedelta(days=CYCLE_DAYS.get(cycle, 365) * quantity)
             if pending_signup_id:
                 # Pay-first signup: the account doesn't exist yet — this is
                 # the one place it actually gets created, only now that

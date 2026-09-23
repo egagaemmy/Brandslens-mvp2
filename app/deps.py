@@ -39,12 +39,13 @@ def active_member(member: OrgMember = Depends(current_member), db: Session = Dep
     who's locked out must still be able to log in and pay to unlock
     themselves; only actual product data is gated by this.
 
-    paid_until only has a value for a one-time, multi-period purchase
-    (quantity > 1 at checkout) — an ordinary recurring subscription leaves
-    it null, since the provider's own billing cycle is what renews access,
-    not a date we track ourselves. Checking it here is what actually makes
-    a prepaid period end on schedule instead of granting access forever
-    the moment it's first activated."""
+    paid_until is set on every successful charge, recurring or one-time,
+    to exactly one billing period from that moment — a renewing
+    subscription keeps pushing this further out with each webhook, while
+    one that silently stops renewing lapses naturally on schedule here,
+    rather than staying active forever from its first activation just
+    because no separate cancellation webhook ever arrived to say
+    otherwise."""
     org = db.get(Organization, member.organization_id)
     if org.billing_status == "exempt":
         return member

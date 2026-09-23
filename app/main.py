@@ -9,6 +9,7 @@ file is the fix.
 from __future__ import annotations
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+import httpx
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
@@ -1651,6 +1652,58 @@ def admin_recover_pending_signup(body: RecoverSignupBody, member: OrgMember = De
     _require_exempt(member, db)
     result = billing.recover_pending_signup_by_tx_ref(db, body.tx_ref)
     return result
+
+
+@app.get("/api/admin/billing-lookup")
+def admin_billing_lookup(email: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """Look up one specific customer's real billing state, including what
+    Flutterwave itself currently says about their subscription — for
+    checking or correcting a single account immediately, rather than
+    waiting for the periodic background check."""
+    _require_exempt(member, db)
+    target = db.scalar(select(OrgMember).where(OrgMember.email == email.lower()))
+    if not target:
+        raise HTTPException(404, "No account found for this email.")
+    org = db.get(Organization, target.organization_id)
+    result = {
+        "organization_id": org.id, "organization_name": org.name, "plan": org.plan,
+        "billing_status": org.billing_status, "billing_provider": org.billing_provider,
+        "paid_until": org.paid_until.isoformat() if org.paid_until else None,
+    }
+    from .config import FLUTTERWAVE_SECRET_KEY
+    if org.billing_provider == "flutterwave" and FLUTTERWAVE_SECRET_KEY:
+        try:
+            resp = httpx.get("https://api.flutterwave.com/v3/subscriptions", params={"email": target.email},
+                            headers={"Authorization": f"Bearer {FLUTTERWAVE_SECRET_KEY}"}, timeout=15)
+            resp.raise_for_status()
+            result["flutterwave_subscriptions"] = resp.json().get("data", [])
+        except Exception as e:  # noqa: BLE001
+            result["flutterwave_lookup_error"] = str(e)
+    return result
+
+
+class BillingCorrectionBody(BaseModel):
+    email: str
+    billing_status: str
+
+
+@app.post("/api/admin/billing-correction")
+def admin_billing_correction(body: BillingCorrectionBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """Manually set a specific account's billing status — the direct fix
+    for one customer, once you've looked them up and confirmed what
+    Flutterwave actually says."""
+    _require_exempt(member, db)
+    if body.billing_status not in ("active", "unpaid", "exempt"):
+        raise HTTPException(422, "billing_status must be 'active', 'unpaid', or 'exempt'.")
+    target = db.scalar(select(OrgMember).where(OrgMember.email == body.email.lower()))
+    if not target:
+        raise HTTPException(404, "No account found for this email.")
+    org = db.get(Organization, target.organization_id)
+    old_status = org.billing_status
+    org.billing_status = body.billing_status
+    db.commit()
+    log.info("Admin %s manually changed billing_status for org %s from %s to %s", member.email, org.id, old_status, body.billing_status)
+    return {"ok": True, "organization_id": org.id, "old_status": old_status, "new_status": body.billing_status}
 
 
 @app.get("/api/admin/notifications")

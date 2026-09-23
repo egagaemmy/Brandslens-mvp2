@@ -16,9 +16,9 @@ from sqlalchemy import select
 
 from .db import SessionLocal, init_db
 from .config import (CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE,
-                     CADENCE_DOMAINS, CADENCE_TELEGRAM_FLUSH, CADENCE_X, CADENCE_SLA_SWEEP, TIMEZONE)
+                     CADENCE_DOMAINS, CADENCE_TELEGRAM_FLUSH, CADENCE_X, CADENCE_SLA_SWEEP, CADENCE_SUBSCRIPTION_VERIFY, TIMEZONE)
 from .models import Workspace
-from .services import pipeline, media_room
+from .services import pipeline, media_room, billing
 from .services.mailer import slack_alert
 from .collectors import (news_collector, nairaland_collector, hackernews_collector, reddit_collector,
                          youtube_collector, domain_collector, telegram_collector, x_collector)
@@ -78,6 +78,17 @@ def sweep_sla() -> None:
         db.close()
 
 
+def verify_stale_subscriptions() -> None:
+    db = SessionLocal()
+    try:
+        result = billing.verify_stale_flutterwave_subscriptions(db)
+        if result["revoked"] > 0:
+            slack_alert(f":warning: Subscription verification revoked access for {result['revoked']} "
+                       f"account(s) with no active Flutterwave subscription (checked {result['checked']} total).")
+    finally:
+        db.close()
+
+
 def start_background_loops() -> None:
     db = SessionLocal()
     channel_map = {ws.id: (ws.telegram_channels or []) for ws in db.scalars(select(Workspace)).all()}
@@ -103,10 +114,11 @@ def main() -> None:
     sched.add_job(run_collector, "interval", minutes=CADENCE_X, args=("x", x_collector.collect), id="x")  # no-ops if X_ENABLED=false
     sched.add_job(flush_telegram, "interval", minutes=CADENCE_TELEGRAM_FLUSH, id="tg-flush")
     sched.add_job(sweep_sla, "interval", minutes=CADENCE_SLA_SWEEP, id="sla-sweep")
+    sched.add_job(verify_stale_subscriptions, "interval", minutes=CADENCE_SUBSCRIPTION_VERIFY, id="subscription-verify")
     sched.start()
     start_background_loops()
-    log.info("MVP worker started — news %sm, nairaland %sm, hackernews %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm",
-             CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE, CADENCE_DOMAINS, CADENCE_SLA_SWEEP)
+    log.info("MVP worker started — news %sm, nairaland %sm, hackernews %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm, subscription verify %sm",
+             CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE, CADENCE_DOMAINS, CADENCE_SLA_SWEEP, CADENCE_SUBSCRIPTION_VERIFY)
     try:
         while True:
             time.sleep(60)
