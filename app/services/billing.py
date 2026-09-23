@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from ..config import (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PAYSTACK_SECRET_KEY,
                       FLUTTERWAVE_SECRET_KEY, FLUTTERWAVE_WEBHOOK_HASH, FRONTEND_ORIGIN, APP_URL, NGN_PER_USD_RATE)
-from ..models import Organization, OrgMember, BillingEvent, PendingSignup, now_utc
+from ..models import Organization, OrgMember, BillingEvent, PendingSignup, now_utc, aware
 
 log = logging.getLogger("billing")
 
@@ -344,6 +344,61 @@ def recover_pending_signup_by_tx_ref(db: Session, tx_ref: str) -> dict:
     return {"ok": True, "member_email": member.email, "organization_id": member.organization_id}
 
 
+WARNING_WINDOW = {"daily": timedelta(hours=6), "monthly": timedelta(days=3), "annual": timedelta(days=7)}
+DEFAULT_WARNING_WINDOW = timedelta(days=3)  # used when billing_cycle is unknown (an account predating this tracking)
+
+
+def check_subscription_expiry(db: Session) -> dict:
+    """Two real notifications, sent at exactly the right moment: a
+    heads-up before a plan renews (sized to the actual billing cycle —
+    six hours matters for a daily plan, a week makes more sense for
+    annual), and a notice the moment access genuinely lapses, matching
+    exactly when active_member starts rejecting requests for that
+    organization. Each fires at most once per billing period —
+    _activate_plan resets both flags on every fresh charge, so a real
+    renewal naturally clears the way for the next period's own warning
+    rather than this ever repeating for the same expiry."""
+    from .mailer import send_expiry_warning_email, send_expiry_notice_email
+    now = now_utc()
+    orgs = db.scalars(select(Organization).where(
+        Organization.billing_status == "active", Organization.paid_until.isnot(None),
+    )).all()
+    warned, notified = 0, 0
+    for org in orgs:
+        paid_until = aware(org.paid_until)
+        recipients = db.scalars(select(OrgMember).where(
+            OrgMember.organization_id == org.id, OrgMember.role.in_(("owner", "lead")),
+        )).all()
+        if not recipients:
+            continue
+        expires_on = paid_until.strftime("%B %-d, %Y")
+
+        if paid_until < now:
+            if org.expiry_notice_sent_at:
+                continue
+            for r in recipients:
+                try:
+                    send_expiry_notice_email(db, r.email, r.name, org.plan, org.name, expires_on)
+                except Exception:  # noqa: BLE001 — one recipient's failure must never block the others or the bookkeeping below
+                    log.exception("Expiry notice email failed for %s", r.email)
+            org.expiry_notice_sent_at = now
+            db.commit()
+            notified += 1
+        else:
+            window = WARNING_WINDOW.get(org.billing_cycle, DEFAULT_WARNING_WINDOW)
+            if paid_until - now > window or org.expiry_warning_sent_at:
+                continue
+            for r in recipients:
+                try:
+                    send_expiry_warning_email(db, r.email, r.name, org.plan, org.name, expires_on)
+                except Exception:  # noqa: BLE001
+                    log.exception("Expiry warning email failed for %s", r.email)
+            org.expiry_warning_sent_at = now
+            db.commit()
+            warned += 1
+    return {"checked": len(orgs), "warned": warned, "notified": notified}
+
+
 def verify_stale_flutterwave_subscriptions(db: Session) -> dict:
     """A safety net for accounts activated before paid_until was tracked
     for every plan (see handle_flutterwave_webhook) — these are
@@ -538,7 +593,7 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
                     org_id = db.get(OrgMember, pending.completed_member_id).organization_id if pending.completed_member_id else org_id
             else:
                 _activate_plan(db, org_id, plan, "flutterwave", str(data.get("customer", {}).get("id", "")),
-                               str(data.get("id", "")), paid_until=paid_until)
+                               str(data.get("id", "")), paid_until=paid_until, cycle=cycle)
         else:
             log.warning("Flutterwave webhook claimed success but server-side verification disagreed — nothing activated or created for %s",
                        pending_signup_id or org_id)
@@ -549,7 +604,7 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
 
 
 def _activate_plan(db: Session, org_id: str, plan: str, provider: str, customer_id: str, subscription_id: str,
-                   paid_until=None) -> None:
+                   paid_until=None, cycle: str = "") -> None:
     if not org_id:
         return
     org = db.get(Organization, org_id)
@@ -564,6 +619,13 @@ def _activate_plan(db: Session, org_id: str, plan: str, provider: str, customer_
     org.billing_status = "active"
     org.plan_activated_at = now_utc()
     org.paid_until = paid_until
+    if cycle:
+        org.billing_cycle = cycle
+    # A fresh, successful charge means a brand new billing period — any
+    # warning/expiry notice sent for the PREVIOUS period no longer
+    # applies, so this period starts with a clean slate.
+    org.expiry_warning_sent_at = None
+    org.expiry_notice_sent_at = None
     org.workspace_limit = PLAN_WORKSPACE_LIMIT.get(plan, org.workspace_limit)
     org.keyword_limit = PLAN_KEYWORD_LIMIT.get(plan, org.keyword_limit)
     db.commit()

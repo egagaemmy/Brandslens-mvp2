@@ -26,7 +26,7 @@ from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention,
                      EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber,
-                     PushSubscription, now_utc, aware)
+                     PushSubscription, Announcement, now_utc, aware)
 from .services import pipeline, media_room, auth, billing
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -1005,9 +1005,14 @@ def _source_status() -> list[dict]:
 
 
 @app.get("/api/sources")
-def list_sources(member: OrgMember = Depends(active_member)) -> list[dict]:
-    """What subscribers see: active sources only, no notes about anything
-    pending, restricted, or off — that's internal-only, not customer-facing."""
+def list_sources(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> list[dict]:
+    """Restricted to the exempt admin account, same as the internal
+    endpoint below — subscribers no longer see anything about which
+    sources exist at all, active or not. This isn't customer-facing
+    information; it's how the product works internally."""
+    org = db.get(Organization, member.organization_id)
+    if org.billing_status != "exempt":
+        raise HTTPException(403, "Source information is admin-only.")
     return [{"key": s["key"], "label": s["label"]} for s in _source_status() if s["active"]]
 
 
@@ -1587,7 +1592,12 @@ def admin_update_legal_document(doc_key: str, body: LegalDocumentBody,
 
 
 EMAIL_TEMPLATE_REGISTRY = {
-    "welcome": {"label": "Welcome Email", "placeholders": ["{{first_name}}", "{{plan}}", "{{app_url}}"]},
+    "welcome": {"label": "Welcome Email", "placeholders": ["{{first_name}}", "{{plan}}", "{{app_url}}"],
+               "default_subject_attr": "DEFAULT_WELCOME_SUBJECT", "default_body_attr": "DEFAULT_WELCOME_BODY"},
+    "expiry_warning": {"label": "Plan Renewal Reminder", "placeholders": ["{{first_name}}", "{{plan}}", "{{company}}", "{{expires_on}}", "{{app_url}}"],
+                       "default_subject_attr": "DEFAULT_EXPIRY_WARNING_SUBJECT", "default_body_attr": "DEFAULT_EXPIRY_WARNING_BODY"},
+    "expiry_notice": {"label": "Access Ended Notice", "placeholders": ["{{first_name}}", "{{plan}}", "{{company}}", "{{expires_on}}", "{{app_url}}"],
+                      "default_subject_attr": "DEFAULT_EXPIRY_NOTICE_SUBJECT", "default_body_attr": "DEFAULT_EXPIRY_NOTICE_BODY"},
 }
 
 
@@ -1603,8 +1613,8 @@ def admin_list_email_templates(member: OrgMember = Depends(active_member), db: S
     from .services.settings import get_setting
     out = []
     for key, meta in EMAIL_TEMPLATE_REGISTRY.items():
-        default_subject = mailer.DEFAULT_WELCOME_SUBJECT if key == "welcome" else ""
-        default_body = mailer.DEFAULT_WELCOME_BODY if key == "welcome" else ""
+        default_subject = getattr(mailer, meta["default_subject_attr"])
+        default_body = getattr(mailer, meta["default_body_attr"])
         out.append({
             "key": key, "label": meta["label"], "placeholders": meta["placeholders"],
             "subject": get_setting(db, f"email:{key}_subject", default_subject),
@@ -1652,6 +1662,33 @@ def admin_recover_pending_signup(body: RecoverSignupBody, member: OrgMember = De
     _require_exempt(member, db)
     result = billing.recover_pending_signup_by_tx_ref(db, body.tx_ref)
     return result
+
+
+@app.get("/api/admin/subscribers")
+def admin_list_subscribers(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """Every real subscriber — every organization except the exempt admin
+    account itself — with the profile details of who actually signed up,
+    so you can see at a glance how many subscribers you have and who
+    they are, without digging through the raw database directly."""
+    _require_exempt(member, db)
+    orgs = db.scalars(select(Organization).where(Organization.billing_status != "exempt").order_by(Organization.created_at.desc())).all()
+    subscribers = []
+    for org in orgs:
+        owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org.id, OrgMember.role == "owner"))
+        member_count = db.scalar(select(func.count()).select_from(OrgMember).where(OrgMember.organization_id == org.id)) or 0
+        workspace_count = db.scalar(select(func.count()).select_from(Workspace).where(Workspace.organization_id == org.id)) or 0
+        subscribers.append({
+            "organization_id": org.id, "company_name": org.name, "sector": org.sector,
+            "plan": org.plan, "billing_status": org.billing_status, "billing_provider": org.billing_provider,
+            "signed_up_at": org.created_at.isoformat() if org.created_at else None,
+            "paid_until": org.paid_until.isoformat() if org.paid_until else None,
+            "owner_name": owner.name if owner else "", "owner_email": owner.email if owner else "",
+            "owner_phone": owner.phone if owner else "", "owner_job_title": owner.job_title if owner else "",
+            "owner_city": owner.city if owner else "", "owner_country": owner.country if owner else "",
+            "owner_last_login_at": owner.last_login_at.isoformat() if owner and owner.last_login_at else None,
+            "member_count": member_count, "workspace_count": workspace_count,
+        })
+    return {"total_count": len(subscribers), "subscribers": subscribers}
 
 
 @app.get("/api/admin/billing-lookup")
@@ -1704,6 +1741,114 @@ def admin_billing_correction(body: BillingCorrectionBody, member: OrgMember = De
     db.commit()
     log.info("Admin %s manually changed billing_status for org %s from %s to %s", member.email, org.id, old_status, body.billing_status)
     return {"ok": True, "organization_id": org.id, "old_status": old_status, "new_status": body.billing_status}
+
+
+MAX_ANNOUNCEMENT_IMAGE_BASE64_CHARS = 2_740_000  # ~2MB decoded — a real banner image, not an uncompressed photo
+
+
+def _announcement_dict(a: "Announcement") -> dict:
+    return {
+        "id": a.id, "format": a.format, "headline": a.headline, "subtext": a.subtext,
+        "image_base64": a.image_base64, "mobile_image_base64": a.mobile_image_base64,
+        "cta_label": a.cta_label, "cta_url": a.cta_url,
+        "starts_at": a.starts_at.isoformat() if a.starts_at else None,
+        "ends_at": a.ends_at.isoformat() if a.ends_at else None,
+        "enabled": a.enabled, "display_order": a.display_order,
+    }
+
+
+class AnnouncementBody(BaseModel):
+    format: str = "bar"
+    headline: str
+    subtext: str = ""
+    image_base64: str = ""
+    mobile_image_base64: str = ""  # optional — the same desktop image scales/crops responsively when this is left blank
+    cta_label: str = ""
+    cta_url: str = ""
+    starts_at: str | None = None  # ISO datetime, or null for "no start bound"
+    ends_at: str | None = None
+    enabled: bool = True
+    display_order: int = 0
+
+
+def _validate_announcement_body(body: AnnouncementBody) -> None:
+    if body.format not in ("bar", "popup", "slider"):
+        raise HTTPException(422, "format must be 'bar', 'popup', or 'slider'.")
+    for field_name, value in (("image_base64", body.image_base64), ("mobile_image_base64", body.mobile_image_base64)):
+        if not value:
+            continue
+        if not value.startswith("data:image/"):
+            raise HTTPException(422, "Banner image must be a valid image.")
+        if len(value) > MAX_ANNOUNCEMENT_IMAGE_BASE64_CHARS:
+            raise HTTPException(422, "That image is too large — please use something under ~2MB.")
+
+
+@app.get("/api/admin/announcements")
+def admin_list_announcements(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> list[dict]:
+    """Every announcement, including disabled and expired ones — Super
+    Admin needs to see and manage the full history, not just what's
+    currently live."""
+    _require_exempt(member, db)
+    rows = db.scalars(select(Announcement).order_by(Announcement.created_at.desc())).all()
+    return [_announcement_dict(a) for a in rows]
+
+
+@app.post("/api/admin/announcements")
+def admin_create_announcement(body: AnnouncementBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    _validate_announcement_body(body)
+    a = Announcement(
+        format=body.format, headline=body.headline, subtext=body.subtext, image_base64=body.image_base64,
+        mobile_image_base64=body.mobile_image_base64, cta_label=body.cta_label, cta_url=body.cta_url,
+        starts_at=datetime.fromisoformat(body.starts_at) if body.starts_at else None,
+        ends_at=datetime.fromisoformat(body.ends_at) if body.ends_at else None,
+        enabled=body.enabled, display_order=body.display_order, updated_by=member.email,
+    )
+    db.add(a)
+    db.commit()
+    return _announcement_dict(a)
+
+
+@app.put("/api/admin/announcements/{announcement_id}")
+def admin_update_announcement(announcement_id: str, body: AnnouncementBody,
+                              member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    _validate_announcement_body(body)
+    a = db.get(Announcement, announcement_id)
+    if not a:
+        raise HTTPException(404, "Announcement not found.")
+    a.format, a.headline, a.subtext = body.format, body.headline, body.subtext
+    a.image_base64, a.mobile_image_base64 = body.image_base64, body.mobile_image_base64
+    a.cta_label, a.cta_url = body.cta_label, body.cta_url
+    a.starts_at = datetime.fromisoformat(body.starts_at) if body.starts_at else None
+    a.ends_at = datetime.fromisoformat(body.ends_at) if body.ends_at else None
+    a.enabled, a.display_order, a.updated_by = body.enabled, body.display_order, member.email
+    db.commit()
+    return _announcement_dict(a)
+
+
+@app.delete("/api/admin/announcements/{announcement_id}")
+def admin_delete_announcement(announcement_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    a = db.get(Announcement, announcement_id)
+    if a:
+        db.delete(a)
+        db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/public/announcements")
+def public_list_announcements(db: Session = Depends(get_db)) -> list[dict]:
+    """Public, unauthenticated — this is what the marketing site fetches
+    to render the banner. Only ever returns announcements that are
+    genuinely enabled AND currently within their scheduled window,
+    computed here server-side so a stale or manually-edited client can
+    never show something that shouldn't be live."""
+    now = now_utc()
+    rows = db.scalars(select(Announcement).where(Announcement.enabled == True)).all()  # noqa: E712
+    active = [a for a in rows if (not a.starts_at or aware(a.starts_at) <= now) and (not a.ends_at or aware(a.ends_at) >= now)]
+    active.sort(key=lambda a: (a.display_order, a.created_at))
+    return [_announcement_dict(a) for a in active]
 
 
 @app.get("/api/admin/notifications")

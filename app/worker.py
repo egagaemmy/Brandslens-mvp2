@@ -16,7 +16,8 @@ from sqlalchemy import select
 
 from .db import SessionLocal, init_db
 from .config import (CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE,
-                     CADENCE_DOMAINS, CADENCE_TELEGRAM_FLUSH, CADENCE_X, CADENCE_SLA_SWEEP, CADENCE_SUBSCRIPTION_VERIFY, TIMEZONE)
+                     CADENCE_DOMAINS, CADENCE_TELEGRAM_FLUSH, CADENCE_X, CADENCE_SLA_SWEEP, CADENCE_SUBSCRIPTION_VERIFY,
+                     CADENCE_EXPIRY_CHECK, TIMEZONE)
 from .models import Workspace
 from .services import pipeline, media_room, billing
 from .services.mailer import slack_alert
@@ -89,6 +90,14 @@ def verify_stale_subscriptions() -> None:
         db.close()
 
 
+def check_subscription_expiry() -> None:
+    db = SessionLocal()
+    try:
+        billing.check_subscription_expiry(db)
+    finally:
+        db.close()
+
+
 def start_background_loops() -> None:
     db = SessionLocal()
     channel_map = {ws.id: (ws.telegram_channels or []) for ws in db.scalars(select(Workspace)).all()}
@@ -115,10 +124,11 @@ def main() -> None:
     sched.add_job(flush_telegram, "interval", minutes=CADENCE_TELEGRAM_FLUSH, id="tg-flush")
     sched.add_job(sweep_sla, "interval", minutes=CADENCE_SLA_SWEEP, id="sla-sweep")
     sched.add_job(verify_stale_subscriptions, "interval", minutes=CADENCE_SUBSCRIPTION_VERIFY, id="subscription-verify")
+    sched.add_job(check_subscription_expiry, "interval", minutes=CADENCE_EXPIRY_CHECK, id="expiry-check")
     sched.start()
     start_background_loops()
-    log.info("MVP worker started — news %sm, nairaland %sm, hackernews %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm, subscription verify %sm",
-             CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE, CADENCE_DOMAINS, CADENCE_SLA_SWEEP, CADENCE_SUBSCRIPTION_VERIFY)
+    log.info("MVP worker started — news %sm, nairaland %sm, hackernews %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm, subscription verify %sm, expiry check %sm",
+             CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENCE_REDDIT, CADENCE_YOUTUBE, CADENCE_DOMAINS, CADENCE_SLA_SWEEP, CADENCE_SUBSCRIPTION_VERIFY, CADENCE_EXPIRY_CHECK)
     try:
         while True:
             time.sleep(60)

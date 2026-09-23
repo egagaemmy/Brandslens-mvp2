@@ -171,7 +171,7 @@ def create_account_from_pending_signup(db: Session, pending: PendingSignup, paid
     org = Organization(name=pending.company, sector=pending.sector, plan=pending.plan,
                        workspace_limit=PLAN_WORKSPACE_LIMIT[pending.plan],
                        keyword_limit=PLAN_KEYWORD_LIMIT[pending.plan],
-                       billing_status="active", paid_until=paid_until)
+                       billing_status="active", paid_until=paid_until, billing_cycle=pending.cycle)
     db.add(org)
     db.flush()
 

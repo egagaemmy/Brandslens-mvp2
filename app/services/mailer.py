@@ -164,6 +164,65 @@ def send_mention_alert_email(db, to: str, name: str, severity: str, workspace_na
     return send_email(to, subject, _wrap(body_html))
 
 
+DEFAULT_EXPIRY_WARNING_SUBJECT = "Your BrandsLens plan renews soon — {{expires_on}}"
+DEFAULT_EXPIRY_WARNING_BODY = """<p>Hi {{first_name}},</p>
+      <p>Your <strong>{{plan}}</strong> plan for <strong>{{company}}</strong> is set to renew on
+      <strong>{{expires_on}}</strong>. If your payment method is up to date, there's nothing you need to do —
+      this is just a heads-up.</p>
+      <p>If you'd like to review or change your plan first, you can do that any time.</p>
+      <p><a href="{{app_url}}/billing" style="background:#{{amber}};color:#0B0F17;padding:10px 20px;
+      border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Manage billing</a></p>
+      <p>Thanks for watching your brand with us.<br>The BrandsLens Team</p>"""
+
+DEFAULT_EXPIRY_NOTICE_SUBJECT = "Your BrandsLens access has ended"
+DEFAULT_EXPIRY_NOTICE_BODY = """<p>Hi {{first_name}},</p>
+      <p>Your <strong>{{plan}}</strong> plan for <strong>{{company}}</strong> ended on <strong>{{expires_on}}</strong>,
+      and monitoring for your brand has paused. Nothing has been deleted — your workspace, keywords, and
+      history are all still here, waiting.</p>
+      <p>Renew any time to pick up exactly where you left off.</p>
+      <p><a href="{{app_url}}/billing" style="background:#{{amber}};color:#0B0F17;padding:10px 20px;
+      border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Renew now</a></p>
+      <p>We'd love to have you back.<br>The BrandsLens Team</p>"""
+
+
+def send_expiry_warning_email(db, to: str, name: str, plan: str, company: str, expires_on: str) -> bool:
+    """Sent once per billing period, a few days (or hours, for a daily
+    plan) before paid_until — a heads-up, not an alarm. Never repeated
+    for the same period: _activate_plan resets this tracking on every
+    fresh charge, so a genuine renewal naturally gets its own fresh
+    warning next time, rather than this firing every time the
+    background check runs."""
+    from .settings import get_setting
+    first_name = name.split(" ")[0] if name else "there"
+    subject_template = get_setting(db, "email:expiry_warning_subject", DEFAULT_EXPIRY_WARNING_SUBJECT)
+    body_template = get_setting(db, "email:expiry_warning_body", DEFAULT_EXPIRY_WARNING_BODY)
+    placeholders = {"{{first_name}}": first_name, "{{plan}}": plan.capitalize(), "{{company}}": company,
+                    "{{expires_on}}": expires_on, "{{app_url}}": APP_URL, "{{amber}}": BRAND["amber"]}
+    subject, body_html = subject_template, body_template
+    for token, real_value in placeholders.items():
+        subject = subject.replace(token, real_value)
+        body_html = body_html.replace(token, real_value)
+    return send_email(to, subject, _wrap(body_html))
+
+
+def send_expiry_notice_email(db, to: str, name: str, plan: str, company: str, expires_on: str) -> bool:
+    """Sent once, the moment access actually lapses — matching exactly
+    when active_member starts rejecting requests for this organization,
+    so the email and the real, felt loss of access happen together
+    rather than one preceding the other by days."""
+    from .settings import get_setting
+    first_name = name.split(" ")[0] if name else "there"
+    subject_template = get_setting(db, "email:expiry_notice_subject", DEFAULT_EXPIRY_NOTICE_SUBJECT)
+    body_template = get_setting(db, "email:expiry_notice_body", DEFAULT_EXPIRY_NOTICE_BODY)
+    placeholders = {"{{first_name}}": first_name, "{{plan}}": plan.capitalize(), "{{company}}": company,
+                    "{{expires_on}}": expires_on, "{{app_url}}": APP_URL, "{{amber}}": BRAND["amber"]}
+    subject, body_html = subject_template, body_template
+    for token, real_value in placeholders.items():
+        subject = subject.replace(token, real_value)
+        body_html = body_html.replace(token, real_value)
+    return send_email(to, subject, _wrap(body_html))
+
+
 def _wrap(inner: str) -> str:
     """Minimal branded HTML wrapper, reusing the same colors as everywhere else."""
     return f"""<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px">

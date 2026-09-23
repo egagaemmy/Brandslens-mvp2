@@ -103,3 +103,4 @@ CADENCE_TELEGRAM_FLUSH = int(env("CADENCE_TELEGRAM_FLUSH", "5"))
 CADENCE_X = int(env("CADENCE_X", "15"))
 CADENCE_SLA_SWEEP = int(env("CADENCE_SLA_SWEEP", "5"))
 CADENCE_SUBSCRIPTION_VERIFY = int(env("CADENCE_SUBSCRIPTION_VERIFY", "360"))  # every 6 hours by default — a safety net, not time-critical
+CADENCE_EXPIRY_CHECK = int(env("CADENCE_EXPIRY_CHECK", "60"))  # hourly — a daily plan's 6-hour warning window needs finer granularity than the subscription-verify check above

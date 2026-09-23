@@ -58,6 +58,9 @@ class Organization(Base):
     plan_cancelled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     read_only_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     paid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    billing_cycle: Mapped[str] = mapped_column(String(10), default="")  # "annual" | "monthly" | "daily" — set on every real charge, used to size a sensible "about to expire" warning window
+    expiry_warning_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)  # reset to null on every fresh charge, so each new period gets its own warning
+    expiry_notice_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)  # same idea, for the "has expired" notice
     # Only meaningful for a one-time, multi-period purchase (quantity > 1 at
     # checkout) — a customer who pays for 3 months up front isn't on a
     # recurring Flutterwave plan, so there's no subscription telling us when
@@ -186,6 +189,39 @@ class SessionToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Announcement(Base):
+    """A promotional banner, discount, or product update — editable from
+    the Super Admin dashboard and displayed on the marketing site without
+    any code change or redeploy. One row is one message/slide; when more
+    than one 'slider' announcement is active at the same time, the
+    marketing site cycles through all of them automatically as slides —
+    they're deliberately not grouped into a separate 'campaign' concept,
+    since each one already carries its own schedule and content.
+
+    starts_at/ends_at being null means "no start/end bound" in that
+    direction — an admin can publish something immediately (no
+    starts_at) or leave something running indefinitely (no ends_at).
+    'enabled' is a manual on/off switch independent of the schedule, for
+    pausing something without losing its dates."""
+    __tablename__ = "announcements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    format: Mapped[str] = mapped_column(String(10), default="bar")  # "bar" | "popup" | "slider"
+    headline: Mapped[str] = mapped_column(String(200))
+    subtext: Mapped[str] = mapped_column(String(400), default="")
+    image_base64: Mapped[str] = mapped_column(Text, default="")  # only meaningful for format="slider"
+    mobile_image_base64: Mapped[str] = mapped_column(Text, default="")  # optional override — falls back to image_base64 when empty, scaled/cropped responsively either way
+    cta_label: Mapped[str] = mapped_column(String(60), default="")
+    cta_url: Mapped[str] = mapped_column(String(500), default="")
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    updated_by: Mapped[str] = mapped_column(String(320), default="")
 
 
 class PushSubscription(Base):
