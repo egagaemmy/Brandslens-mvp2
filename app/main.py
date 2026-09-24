@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 import httpx
+import base64
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
@@ -1837,6 +1838,25 @@ def admin_delete_announcement(announcement_id: str, member: OrgMember = Depends(
     return {"ok": True}
 
 
+def _public_announcement_dict(a: "Announcement") -> dict:
+    """The public-facing shape — deliberately does NOT include the raw
+    image data. Embedding a 550KB (or larger) image as base64 text
+    directly in this response means the browser can't render anything
+    at all, not even the headline text, until the whole bloated
+    response has downloaded — a real, measured cause of a
+    catastrophically slow First Contentful Paint. Pointing at a
+    separate image URL instead lets the browser load images as actual,
+    cacheable images — progressively, without blocking the rest of the
+    page — which is the same reason ordinary <img> tags exist at all
+    rather than everyone just inlining every image as a data URI."""
+    return {
+        "id": a.id, "format": a.format, "headline": a.headline, "subtext": a.subtext,
+        "image_url": f"/api/public/announcements/{a.id}/image" if a.image_base64 else None,
+        "mobile_image_url": f"/api/public/announcements/{a.id}/image?variant=mobile" if a.mobile_image_base64 else None,
+        "cta_label": a.cta_label, "cta_url": a.cta_url, "display_order": a.display_order,
+    }
+
+
 @app.get("/api/public/announcements")
 def public_list_announcements(db: Session = Depends(get_db)) -> list[dict]:
     """Public, unauthenticated — this is what the marketing site fetches
@@ -1848,7 +1868,27 @@ def public_list_announcements(db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(Announcement).where(Announcement.enabled == True)).all()  # noqa: E712
     active = [a for a in rows if (not a.starts_at or aware(a.starts_at) <= now) and (not a.ends_at or aware(a.ends_at) >= now)]
     active.sort(key=lambda a: (a.display_order, a.created_at))
-    return [_announcement_dict(a) for a in active]
+    return [_public_announcement_dict(a) for a in active]
+
+
+@app.get("/api/public/announcements/{announcement_id}/image")
+def public_announcement_image(announcement_id: str, variant: str = "desktop", db: Session = Depends(get_db)) -> Response:
+    """Serves one announcement's image as a genuine image response —
+    the actual bytes, the correct Content-Type, and real caching
+    headers — rather than as text embedded in a JSON payload. This is
+    what lets a repeat visitor skip re-downloading it entirely, and
+    lets the browser load it without blocking anything else on the page."""
+    a = db.get(Announcement, announcement_id)
+    if not a:
+        raise HTTPException(404, "Not found.")
+    data_url = a.mobile_image_base64 if (variant == "mobile" and a.mobile_image_base64) else a.image_base64
+    if not data_url or not data_url.startswith("data:"):
+        raise HTTPException(404, "No image set.")
+    header, encoded = data_url.split(",", 1)
+    content_type = header.split(";")[0].replace("data:", "") or "image/png"
+    image_bytes = base64.b64decode(encoded)
+    return Response(content=image_bytes, media_type=content_type,
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.get("/api/admin/notifications")
