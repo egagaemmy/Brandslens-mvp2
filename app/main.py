@@ -292,6 +292,7 @@ def get_workspace(ws: Workspace = Depends(owned_workspace), db: Session = Depend
            "brand_domains": ws.brand_domains, "telegram_channels": ws.telegram_channels,
            "reddit_subreddits": ws.reddit_subreddits, "youtube_query": ws.youtube_query,
            "slack_webhook_url": ws.slack_webhook_url,
+           "ave_cpm_rate": ws.ave_cpm_rate, "ave_multiplier": ws.ave_multiplier,
            "incidents": [_inc_dict(i) for i in incidents]}
 
 
@@ -304,6 +305,8 @@ class WorkspaceUpdateBody(BaseModel):
     reddit_subreddits: list[str] | None = None
     youtube_query: str | None = None
     slack_webhook_url: str | None = None
+    ave_cpm_rate: float | None = None
+    ave_multiplier: float | None = None
 
 
 @app.patch("/api/workspaces/{ws_id}")
@@ -1744,6 +1747,31 @@ def admin_billing_correction(body: BillingCorrectionBody, member: OrgMember = De
     return {"ok": True, "organization_id": org.id, "old_status": old_status, "new_status": body.billing_status}
 
 
+def _optimize_announcement_image(data_url: str, max_width: int) -> str:
+    """Resizes and re-compresses an uploaded banner image before it's
+    ever stored, rather than keeping it at whatever size and format it
+    was uploaded in. A banner doesn't need to be wider than a real
+    browser viewport ever renders it, and a photo doesn't need lossless
+    PNG encoding — both of those were real, measured contributors to a
+    slow page load for anyone who ever uploads a large source image."""
+    import io
+    from PIL import Image
+    header, encoded = data_url.split(",", 1)
+    img = Image.open(io.BytesIO(base64.b64decode(encoded)))
+    has_transparency = img.mode in ("RGBA", "LA", "P") and img.mode != "P" or (img.mode == "P" and "transparency" in img.info)
+    if img.width > max_width:
+        new_height = int(img.height * (max_width / img.width))
+        img = img.resize((max_width, new_height), Image.LANCZOS)
+    buffer = io.BytesIO()
+    if has_transparency:
+        img.convert("RGBA").save(buffer, format="PNG", optimize=True)
+        mime = "image/png"
+    else:
+        img.convert("RGB").save(buffer, format="JPEG", quality=82, optimize=True)
+        mime = "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(buffer.getvalue()).decode()}"
+
+
 MAX_ANNOUNCEMENT_IMAGE_BASE64_CHARS = 2_740_000  # ~2MB decoded — a real banner image, not an uncompressed photo
 
 
@@ -1794,13 +1822,20 @@ def admin_list_announcements(member: OrgMember = Depends(active_member), db: Ses
     return [_announcement_dict(a) for a in rows]
 
 
+def _optimize_body_images(body: "AnnouncementBody") -> tuple[str, str]:
+    image = _optimize_announcement_image(body.image_base64, max_width=1600) if body.image_base64 else ""
+    mobile_image = _optimize_announcement_image(body.mobile_image_base64, max_width=800) if body.mobile_image_base64 else ""
+    return image, mobile_image
+
+
 @app.post("/api/admin/announcements")
 def admin_create_announcement(body: AnnouncementBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     _require_exempt(member, db)
     _validate_announcement_body(body)
+    image_base64, mobile_image_base64 = _optimize_body_images(body)
     a = Announcement(
-        format=body.format, headline=body.headline, subtext=body.subtext, image_base64=body.image_base64,
-        mobile_image_base64=body.mobile_image_base64, cta_label=body.cta_label, cta_url=body.cta_url,
+        format=body.format, headline=body.headline, subtext=body.subtext, image_base64=image_base64,
+        mobile_image_base64=mobile_image_base64, cta_label=body.cta_label, cta_url=body.cta_url,
         starts_at=datetime.fromisoformat(body.starts_at) if body.starts_at else None,
         ends_at=datetime.fromisoformat(body.ends_at) if body.ends_at else None,
         enabled=body.enabled, display_order=body.display_order, updated_by=member.email,
@@ -1818,8 +1853,9 @@ def admin_update_announcement(announcement_id: str, body: AnnouncementBody,
     a = db.get(Announcement, announcement_id)
     if not a:
         raise HTTPException(404, "Announcement not found.")
+    image_base64, mobile_image_base64 = _optimize_body_images(body)
     a.format, a.headline, a.subtext = body.format, body.headline, body.subtext
-    a.image_base64, a.mobile_image_base64 = body.image_base64, body.mobile_image_base64
+    a.image_base64, a.mobile_image_base64 = image_base64, mobile_image_base64
     a.cta_label, a.cta_url = body.cta_label, body.cta_url
     a.starts_at = datetime.fromisoformat(body.starts_at) if body.starts_at else None
     a.ends_at = datetime.fromisoformat(body.ends_at) if body.ends_at else None
@@ -1849,10 +1885,11 @@ def _public_announcement_dict(a: "Announcement") -> dict:
     cacheable images — progressively, without blocking the rest of the
     page — which is the same reason ordinary <img> tags exist at all
     rather than everyone just inlining every image as a data URI."""
+    version = int(a.updated_at.timestamp()) if a.updated_at else 0
     return {
         "id": a.id, "format": a.format, "headline": a.headline, "subtext": a.subtext,
-        "image_url": f"/api/public/announcements/{a.id}/image" if a.image_base64 else None,
-        "mobile_image_url": f"/api/public/announcements/{a.id}/image?variant=mobile" if a.mobile_image_base64 else None,
+        "image_url": f"/api/public/announcements/{a.id}/image?v={version}" if a.image_base64 else None,
+        "mobile_image_url": f"/api/public/announcements/{a.id}/image?variant=mobile&v={version}" if a.mobile_image_base64 else None,
         "cta_label": a.cta_label, "cta_url": a.cta_url, "display_order": a.display_order,
     }
 
@@ -1888,7 +1925,7 @@ def public_announcement_image(announcement_id: str, variant: str = "desktop", db
     content_type = header.split(";")[0].replace("data:", "") or "image/png"
     image_bytes = base64.b64decode(encoded)
     return Response(content=image_bytes, media_type=content_type,
-                    headers={"Cache-Control": "public, max-age=3600"})
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/api/admin/notifications")
@@ -2055,11 +2092,14 @@ def report_pdf(ws: Workspace = Depends(owned_workspace), member: OrgMember = Dep
                db: Session = Depends(get_db), range: str | None = None, start: str | None = None,
                end: str | None = None, keywords: str | None = None) -> Response:
     _require_report_format(member, db, "pdf")
+    from .services.metrics import calculate_sov
+    start_dt, end_dt = _date_range_bounds(range, start, end)
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
     incidents = _apply_keyword_filter(incidents, keywords)
     comp_rows = _get_competitor_rows(ws, db)
-    pdf_bytes = report_generator.generate_pdf_report(ws, incidents, comp_rows)
+    sov_data = calculate_sov(db, ws.id, start_dt, end_dt)
+    pdf_bytes = report_generator.generate_pdf_report(ws, incidents, comp_rows, sov_data)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -2070,11 +2110,14 @@ def report_pptx(ws: Workspace = Depends(owned_workspace), member: OrgMember = De
                 db: Session = Depends(get_db), range: str | None = None, start: str | None = None,
                 end: str | None = None, keywords: str | None = None) -> Response:
     _require_report_format(member, db, "pptx")
+    from .services.metrics import calculate_sov
+    start_dt, end_dt = _date_range_bounds(range, start, end)
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(500)).all()
     incidents = _apply_keyword_filter(incidents, keywords)
     comp_rows = _get_competitor_rows(ws, db)
-    pptx_bytes = report_generator.generate_pptx_report(ws, incidents, comp_rows)
+    sov_data = calculate_sov(db, ws.id, start_dt, end_dt)
+    pptx_bytes = report_generator.generate_pptx_report(ws, incidents, comp_rows, sov_data)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-report.pptx"
     return Response(content=pptx_bytes,
                     media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -2086,11 +2129,14 @@ def report_excel(ws: Workspace = Depends(owned_workspace), db: Session = Depends
                  range: str | None = None, start: str | None = None, end: str | None = None,
                  keywords: str | None = None) -> Response:
     # Excel is available on every tier, including Standard — no gating here.
+    from .services.metrics import calculate_sov
+    start_dt, end_dt = _date_range_bounds(range, start, end)
     q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     incidents = db.scalars(q.order_by(Incident.posted_at.desc()).limit(2000)).all()
     incidents = _apply_keyword_filter(incidents, keywords)
     comp_rows = _get_competitor_rows(ws, db)
-    xlsx_bytes = report_generator.generate_excel_export(ws, incidents, comp_rows)
+    sov_data = calculate_sov(db, ws.id, start_dt, end_dt)
+    xlsx_bytes = report_generator.generate_excel_export(ws, incidents, comp_rows, sov_data)
     filename = f"{ws.name.replace(' ', '-').lower()}-brandslens-export.xlsx"
     return Response(content=xlsx_bytes,
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2199,8 +2245,12 @@ def competitor_analytics(ws: Workspace = Depends(owned_workspace), db: Session =
                          range: str | None = None, start: str | None = None, end: str | None = None) -> dict:
     """Comparative data: your own brand's mention volume and sentiment
     alongside every tracked competitor's — same date filter as the rest of
-    the app, so this stays consistent with whatever the dashboard shows."""
+    the app, so this stays consistent with whatever the dashboard shows.
+    Also includes Share of Voice and Advertising Value Equivalency,
+    calculated over that same filtered window."""
     from collections import Counter
+    from .services.metrics import calculate_ave, calculate_sov
+    start_dt, end_dt = _date_range_bounds(range, start, end)
     own_q = _apply_date_filter(select(Incident).where(Incident.workspace_id == ws.id), range, start, end)
     own_incidents = db.scalars(own_q).all()
     own_sentiment = Counter(i.sentiment for i in own_incidents if i.sentiment)
@@ -2214,4 +2264,8 @@ def competitor_analytics(ws: Workspace = Depends(owned_workspace), db: Session =
         platform = Counter(m.platform for m in mentions)
         rows.append({"name": comp.name, "is_you": False, "mentions": len(mentions),
                     "sentiment": dict(sent), "platform": dict(platform)})
-    return {"rows": rows}
+    return {
+        "rows": rows,
+        "sov": calculate_sov(db, ws.id, start_dt, end_dt),
+        "ave": calculate_ave(own_incidents, ws),
+    }

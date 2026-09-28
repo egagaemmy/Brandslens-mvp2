@@ -112,7 +112,10 @@ def generate_executive_summary(workspace: Workspace, incidents: list[Incident]) 
 # ==================================================================
 # PDF REPORT
 # ==================================================================
-def generate_pdf_report(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None) -> bytes:
+def generate_pdf_report(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None,
+                        sov_data: dict | None = None) -> bytes:
+    from .metrics import calculate_ave
+    ave_data = calculate_ave(incidents, workspace)
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=22 * mm, bottomMargin=18 * mm,
                             leftMargin=18 * mm, rightMargin=18 * mm)
@@ -167,6 +170,29 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident], competi
         ("TOPPADDING", (0, 0), (-1, 0), 4), ("BOTTOMPADDING", (0, 1), (-1, 1), 10),
     ]))
     story.append(kpi_table)
+
+    # --- AVE & SOV ---
+    story.append(Paragraph("Estimated Media Value &amp; Share of Voice", h2_style))
+    ave_sov_data = [["ESTIMATED MEDIA VALUE (AVE)", "SHARE OF VOICE"],
+                    [f"${ave_data['total']:,.0f}", f"{sov_data['sov_percent']:.1f}%" if sov_data else "N/A"]]
+    ave_sov_table = Table(ave_sov_data, colWidths=[84 * mm] * 2)
+    ave_sov_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, 0), 7.5),
+        ("TEXTCOLOR", (0, 0), (-1, 0), SLATE), ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 1), (-1, 1), 20), ("TEXTCOLOR", (0, 1), (-1, 1), AMBER),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, HexColor("#E5E7EB")),
+        ("TOPPADDING", (0, 0), (-1, 0), 4), ("BOTTOMPADDING", (0, 1), (-1, 1), 6),
+    ]))
+    story.append(ave_sov_table)
+    footnote_style = ParagraphStyle("Footnote", parent=styles["Normal"], fontName="Helvetica-Oblique",
+                                    fontSize=7.5, textColor=SLATE, spaceBefore=4, spaceAfter=10)
+    story.append(Paragraph(
+        f"AVE estimated at ${ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x editorial value, "
+        f"based on {ave_data['mention_count']} mention(s)' estimated reach this period."
+        + (f" Share of Voice is measured against {len(sov_data['competitor_mentions'])} tracked competitor(s)."
+           if sov_data and sov_data['competitor_mentions'] else ""),
+        footnote_style))
 
     # --- Severity & sentiment breakdown ---
     story.append(Paragraph("Severity &amp; Sentiment Breakdown", h2_style))
@@ -242,7 +268,10 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident], competi
 # ==================================================================
 # EXCEL EXPORT
 # ==================================================================
-def generate_excel_export(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None) -> bytes:
+def generate_excel_export(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None,
+                          sov_data: dict | None = None) -> bytes:
+    from .metrics import calculate_ave
+    ave_data = calculate_ave(incidents, workspace)
     wb = Workbook()
     ws = wb.active
     ws.title = "Incidents"
@@ -315,6 +344,18 @@ def generate_excel_export(workspace: Workspace, incidents: list[Incident], compe
         summary.cell(row=row, column=2, value=sev_counts.get(sev, 0))
     summary.column_dimensions["A"].width = 60
     summary.column_dimensions["B"].width = 10
+
+    row += 2
+    summary.cell(row=row, column=1, value="Estimated Media Value (AVE)").font = Font(bold=True, color=BRAND["amber_dark"])
+    row += 1
+    summary.cell(row=row, column=1, value=f"${ave_data['total']:,.0f}").font = Font(bold=True, size=14, color=BRAND["navy"])
+    summary.cell(row=row, column=2, value=f"{ave_data['mention_count']} mention(s) · ${ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x").font = Font(size=9.5, color=BRAND["slate"])
+    if sov_data:
+        row += 2
+        summary.cell(row=row, column=1, value="Share of Voice").font = Font(bold=True, color=BRAND["amber_dark"])
+        row += 1
+        summary.cell(row=row, column=1, value=f"{sov_data['sov_percent']:.1f}%").font = Font(bold=True, size=14, color=BRAND["navy"])
+        summary.cell(row=row, column=2, value=f"{sov_data['brand_mentions']} of {sov_data['total_tracked_mentions']} tracked mentions").font = Font(size=9.5, color=BRAND["slate"])
 
     if competitor_rows:
         comp_sheet = wb.create_sheet("Competitors")
@@ -431,6 +472,32 @@ def _pptx_kpi_slide(prs, sev_counts: Counter, total: int):
     return slide
 
 
+def _pptx_ave_sov_slide(prs, ave_data: dict, sov_data: dict | None):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _pptx_bg(slide, PPTX_WHITE)
+    _pptx_text(slide, Inches(0.7), Inches(0.5), Inches(11.5), Inches(0.7),
+              "Estimated Media Value & Share of Voice", size=28, color=PPTX_NAVY, bold=True)
+    cards = [("ESTIMATED MEDIA VALUE (AVE)", f"${ave_data['total']:,.0f}",
+             f"{ave_data['mention_count']} mention(s) \u00b7 ${ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x")]
+    if sov_data:
+        cards.append(("SHARE OF VOICE", f"{sov_data['sov_percent']:.1f}%",
+                      f"{sov_data['brand_mentions']} of {sov_data['total_tracked_mentions']} tracked mentions"))
+    card_w = Inches(5.6); gap = Inches(0.4); start_x = Inches(0.7)
+    for i, (label, value, note) in enumerate(cards):
+        x = start_x + i * (card_w + gap)
+        box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, Inches(2.0), card_w, Inches(2.8))
+        box.fill.solid(); box.fill.fore_color.rgb = RGBColor.from_string("F8FAFC")
+        box.line.color.rgb = RGBColor.from_string("E5E7EB"); box.line.width = Pt(1)
+        box.shadow.inherit = False
+        _pptx_text(slide, x + Inches(0.3), Inches(2.3), card_w - Inches(0.6), Inches(0.4),
+                  label, size=13, color=PPTX_SLATE, bold=True, align=PP_ALIGN.CENTER)
+        _pptx_text(slide, x + Inches(0.3), Inches(2.8), card_w - Inches(0.6), Inches(1.0),
+                  value, size=44, color=RGBColor.from_string(BRAND["amber_dark"]), bold=True, align=PP_ALIGN.CENTER)
+        _pptx_text(slide, x + Inches(0.3), Inches(3.9), card_w - Inches(0.6), Inches(0.6),
+                  note, size=11, color=PPTX_SLATE, align=PP_ALIGN.CENTER)
+    return slide
+
+
 def _pptx_chart_slide(prs, title: str, categories: list, values: list, chart_type, colors: list = None):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _pptx_bg(slide, PPTX_WHITE)
@@ -499,7 +566,10 @@ def _pptx_top_incidents_slides(prs, incidents: list[Incident]):
     return prs
 
 
-def generate_pptx_report(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None) -> bytes:
+def generate_pptx_report(workspace: Workspace, incidents: list[Incident], competitor_rows: list[dict] | None = None,
+                         sov_data: dict | None = None) -> bytes:
+    from .metrics import calculate_ave
+    ave_data = calculate_ave(incidents, workspace)
     prs = Presentation()
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
@@ -512,6 +582,7 @@ def generate_pptx_report(workspace: Workspace, incidents: list[Incident], compet
     _pptx_title_slide(prs, workspace, len(incidents))
     _pptx_exec_summary_slide(prs, exec_summary)
     _pptx_kpi_slide(prs, sev_counts, len(incidents))
+    _pptx_ave_sov_slide(prs, ave_data, sov_data)
 
     sev_labels = [s for s in ("HIGH", "MEDIUM", "WATCH") if sev_counts.get(s)]
     _pptx_chart_slide(prs, "Severity Breakdown", sev_labels, [sev_counts[s] for s in sev_labels],
