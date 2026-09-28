@@ -17,6 +17,16 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./brandslens_mvp.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+# A bare "postgresql://" leaves SQLAlchemy to auto-pick a driver, and that
+# choice isn't stable across SQLAlchemy versions — a routine dependency
+# update once silently switched its default from the psycopg2 package this
+# app actually installs to the newer psycopg (v3) package it does not,
+# crashing every deploy with a confusing "No module named 'psycopg'" error
+# that had nothing to do with anything in this file changing. Naming the
+# driver explicitly removes that ambiguity for good.
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
