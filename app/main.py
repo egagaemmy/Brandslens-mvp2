@@ -292,7 +292,7 @@ def get_workspace(ws: Workspace = Depends(owned_workspace), db: Session = Depend
            "brand_domains": ws.brand_domains, "telegram_channels": ws.telegram_channels,
            "reddit_subreddits": ws.reddit_subreddits, "youtube_query": ws.youtube_query,
            "slack_webhook_url": ws.slack_webhook_url,
-           "ave_cpm_rate": ws.ave_cpm_rate, "ave_multiplier": ws.ave_multiplier,
+           "ave_cpm_rate": ws.ave_cpm_rate, "ave_multiplier": ws.ave_multiplier, "ave_currency": ws.ave_currency,
            "incidents": [_inc_dict(i) for i in incidents]}
 
 
@@ -307,6 +307,7 @@ class WorkspaceUpdateBody(BaseModel):
     slack_webhook_url: str | None = None
     ave_cpm_rate: float | None = None
     ave_multiplier: float | None = None
+    ave_currency: str | None = None
 
 
 @app.patch("/api/workspaces/{ws_id}")
@@ -321,6 +322,11 @@ def update_workspace(body: WorkspaceUpdateBody, ws: Workspace = Depends(owned_wo
         limit = PLAN_KEYWORD_LIMIT[effective_plan(org)]
         if len(updates["keywords"]) > limit:
             raise HTTPException(422, f"Your plan allows up to {limit} tracked keywords")
+    if "ave_currency" in updates and updates["ave_currency"] is not None:
+        code = updates["ave_currency"].strip().upper()
+        if len(code) != 3 or not code.isalpha():
+            raise HTTPException(422, "Currency must be a 3-letter code, e.g. USD, NGN, EUR, GBP.")
+        updates["ave_currency"] = code
     for field, value in updates.items():
         if value is not None:
             setattr(ws, field, value)

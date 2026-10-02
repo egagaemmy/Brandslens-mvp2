@@ -273,7 +273,8 @@ class Workspace(Base):
     reddit_subreddits: Mapped[list] = mapped_column(JSON, default=list)
     youtube_query: Mapped[str] = mapped_column(String(300), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    ave_cpm_rate: Mapped[float] = mapped_column(Float, default=15.0)  # $ per 1,000 estimated reach — a standard digital-advertising CPM baseline; markets and industries vary, hence configurable per workspace
+    ave_cpm_rate: Mapped[float] = mapped_column(Float, default=15.0)  # in ave_currency below, per 1,000 estimated reach — a standard digital-advertising CPM baseline; markets and industries vary, hence configurable per workspace
+    ave_currency: Mapped[str] = mapped_column(String(3), default="USD")  # ISO 4217 code — the CPM rate above is denominated in this, and every AVE figure shown anywhere reports in it
     ave_multiplier: Mapped[float] = mapped_column(Float, default=3.0)  # editorial credibility multiplier — the PR-industry convention that earned coverage is worth more than equivalent paid ad space, typically cited in the 2x-8x range
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

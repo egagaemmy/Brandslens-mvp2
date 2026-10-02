@@ -174,7 +174,7 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident], competi
     # --- AVE & SOV ---
     story.append(Paragraph("Estimated Media Value &amp; Share of Voice", h2_style))
     ave_sov_data = [["ESTIMATED MEDIA VALUE (AVE)", "SHARE OF VOICE"],
-                    [f"${ave_data['total']:,.0f}", f"{sov_data['sov_percent']:.1f}%" if sov_data else "N/A"]]
+                    [f"{ave_data['currency']} {ave_data['total']:,.0f}", f"{sov_data['sov_percent']:.1f}%" if sov_data else "N/A"]]
     ave_sov_table = Table(ave_sov_data, colWidths=[84 * mm] * 2)
     ave_sov_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, 0), 7.5),
@@ -188,7 +188,7 @@ def generate_pdf_report(workspace: Workspace, incidents: list[Incident], competi
     footnote_style = ParagraphStyle("Footnote", parent=styles["Normal"], fontName="Helvetica-Oblique",
                                     fontSize=7.5, textColor=SLATE, spaceBefore=4, spaceAfter=10)
     story.append(Paragraph(
-        f"AVE estimated at ${ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x editorial value, "
+        f"AVE estimated at {ave_data['currency']} {ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x editorial value, "
         f"based on {ave_data['mention_count']} mention(s)' estimated reach this period."
         + (f" Share of Voice is measured against {len(sov_data['competitor_mentions'])} tracked competitor(s)."
            if sov_data and sov_data['competitor_mentions'] else ""),
@@ -348,8 +348,8 @@ def generate_excel_export(workspace: Workspace, incidents: list[Incident], compe
     row += 2
     summary.cell(row=row, column=1, value="Estimated Media Value (AVE)").font = Font(bold=True, color=BRAND["amber_dark"])
     row += 1
-    summary.cell(row=row, column=1, value=f"${ave_data['total']:,.0f}").font = Font(bold=True, size=14, color=BRAND["navy"])
-    summary.cell(row=row, column=2, value=f"{ave_data['mention_count']} mention(s) · ${ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x").font = Font(size=9.5, color=BRAND["slate"])
+    summary.cell(row=row, column=1, value=f"{ave_data['currency']} {ave_data['total']:,.0f}").font = Font(bold=True, size=14, color=BRAND["navy"])
+    summary.cell(row=row, column=2, value=f"{ave_data['mention_count']} mention(s) · {ave_data['currency']} {ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x").font = Font(size=9.5, color=BRAND["slate"])
     if sov_data:
         row += 2
         summary.cell(row=row, column=1, value="Share of Voice").font = Font(bold=True, color=BRAND["amber_dark"])
@@ -477,8 +477,8 @@ def _pptx_ave_sov_slide(prs, ave_data: dict, sov_data: dict | None):
     _pptx_bg(slide, PPTX_WHITE)
     _pptx_text(slide, Inches(0.7), Inches(0.5), Inches(11.5), Inches(0.7),
               "Estimated Media Value & Share of Voice", size=28, color=PPTX_NAVY, bold=True)
-    cards = [("ESTIMATED MEDIA VALUE (AVE)", f"${ave_data['total']:,.0f}",
-             f"{ave_data['mention_count']} mention(s) \u00b7 ${ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x")]
+    cards = [("ESTIMATED MEDIA VALUE (AVE)", f"{ave_data['currency']} {ave_data['total']:,.0f}",
+             f"{ave_data['mention_count']} mention(s) \u00b7 {ave_data['currency']} {ave_data['cpm_rate']:.2f} CPM \u00d7 {ave_data['multiplier']:.1f}x")]
     if sov_data:
         cards.append(("SHARE OF VOICE", f"{sov_data['sov_percent']:.1f}%",
                       f"{sov_data['brand_mentions']} of {sov_data['total_tracked_mentions']} tracked mentions"))
