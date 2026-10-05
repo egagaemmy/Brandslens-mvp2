@@ -21,7 +21,7 @@ from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session
 
 from .db import get_db, init_db
-from .config import FRONTEND_ORIGIN, BLOG_URL, APP_NAME, ADMIN_SETUP_SECRET
+from .config import FRONTEND_ORIGIN, BLOG_URL, APP_NAME, ADMIN_SETUP_SECRET, REDIRECT_RAW_BLOG_HOST
 from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
@@ -34,6 +34,9 @@ from .services.billing import BillingNotConfigured
 from .collectors import news_collector, nairaland_collector, hackernews_collector, reddit_collector, youtube_collector, domain_collector, x_collector
 
 app = FastAPI(title=APP_NAME)
+from .routes_referrals import router as referrals_router  # noqa: E402
+from .services import referrals as referrals_svc  # noqa: E402
+app.include_router(referrals_router)
 log = logging.getLogger("main")
 # CORS deliberately does NOT rely solely on FRONTEND_ORIGIN — that variable
 # is also used elsewhere for a different purpose (the "back to homepage"
@@ -49,6 +52,31 @@ KNOWN_ORIGINS = ["https://brandslens.com", "https://www.brandslens.com",
 cors_origins = KNOWN_ORIGINS if FRONTEND_ORIGIN == "*" else list({*KNOWN_ORIGINS, FRONTEND_ORIGIN})
 app.add_middleware(CORSMiddleware, allow_origins=cors_origins,
                    allow_methods=["*"], allow_headers=["*"], expose_headers=["Content-Disposition"])
+
+@app.middleware("http")
+async def keep_raw_host_out_of_search(request: Request, call_next):
+    """This service answers on two kinds of address: the real, public ones
+    (blog.brandslens.com) and the raw hosting address Render assigns
+    (*.onrender.com). Search engines found and indexed pages on the raw
+    one, which splits the site's standing across two domains. This steers
+    them to the real one — and only ever acts on the raw address, so
+    nothing served on a real domain changes at all.
+
+      * Blog pages: already carry a canonical tag naming BLOG_URL. With
+        REDIRECT_RAW_BLOG_HOST on, they're also permanently redirected there.
+      * Legal pages: carry no canonical, so on the raw address they're simply
+        marked noindex.
+    API responses are never touched."""
+    host = request.headers.get("host", "").split(":")[0].lower()
+    path = request.url.path
+    on_raw_host = host.endswith(".onrender.com")
+    if on_raw_host and REDIRECT_RAW_BLOG_HOST and request.method in ("GET", "HEAD") and (path == "/blog" or path.startswith("/blog/")):
+        return RedirectResponse(url=f"{BLOG_URL}{path}", status_code=301)
+    response = await call_next(request)
+    if on_raw_host and path.startswith("/legal/"):
+        response.headers["X-Robots-Tag"] = "noindex"
+    return response
+
 
 COLLECTORS = [news_collector, nairaland_collector, hackernews_collector, reddit_collector, youtube_collector, domain_collector, x_collector]
 ROLE_LABEL = {"owner": "Owner", "lead": "Team Lead", "member": "Team Member"}
@@ -292,7 +320,7 @@ def get_workspace(ws: Workspace = Depends(owned_workspace), db: Session = Depend
            "brand_domains": ws.brand_domains, "telegram_channels": ws.telegram_channels,
            "reddit_subreddits": ws.reddit_subreddits, "youtube_query": ws.youtube_query,
            "slack_webhook_url": ws.slack_webhook_url,
-           "ave_cpm_rate": ws.ave_cpm_rate, "ave_multiplier": ws.ave_multiplier, "ave_currency": ws.ave_currency,
+           "ave_cpm_rate": ws.ave_cpm_rate, "ave_multiplier": ws.ave_multiplier, "ave_currency": ws.ave_currency or "USD",
            "incidents": [_inc_dict(i) for i in incidents]}
 
 
@@ -777,6 +805,7 @@ class PendingCheckoutBody(BaseModel):
     cycle: str = "annual"
     quantity: int = 1
     pay_in_ngn: bool = False
+    referral_code: str = ""
 
 
 @app.post("/api/billing/pending-checkout")
@@ -801,6 +830,9 @@ def start_pending_checkout(body: PendingCheckoutBody, db: Session = Depends(get_
         tx_ref="",  # set below, once we have the real one from Flutterwave's initiation call
         name=body.name, email=body.email.lower(), password_hash=auth.hash_password(body.password),
         company=body.company, sector=body.sector, plan=body.plan, cycle=body.cycle, quantity=body.quantity,
+        # Only a code that really exists and is active is kept; a typo or a
+        # stale cookie is silently ignored rather than blocking someone from paying.
+        referral_code=(lambda r: r.code if r else "")(referrals_svc.find_active_by_code(db, body.referral_code)),
     )
     db.add(pending)
     db.flush()
@@ -1137,11 +1169,40 @@ def setup_sync_schema(secret: str, db: Session = Depends(get_db)) -> dict:
                         default_clause = f" DEFAULT {'TRUE' if val else 'FALSE'}"
                     elif isinstance(val, (int, float)):
                         default_clause = f" DEFAULT {val}"
+                    elif isinstance(val, str):
+                        default_clause = " DEFAULT '" + val.replace("'", "''") + "'"
                 conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}{default_clause}'))
                 added.append(f"{table_name}.{col.name}")
 
-    return {"ok": True, "columns_added": added,
-           "message": "Schema synced — no existing data was touched." if added else
+        # Backfill. A column added to a table that already has rows comes
+        # out NULL for those rows unless the database applied a default —
+        # and until now this only wrote defaults for numbers and booleans,
+        # not text, so a new text column with a default (a currency code,
+        # say) was silently NULL on every existing row. This fills any such
+        # gap, and is safe to run repeatedly: it only touches NULLs in
+        # columns that are declared non-nullable with a plain default.
+        backfilled = []
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in existing_tables:
+                continue
+            for col in table.columns:
+                if col.nullable or col.primary_key or col.default is None or not getattr(col.default, "is_scalar", False):
+                    continue
+                val = col.default.arg
+                if isinstance(val, bool):
+                    literal = "TRUE" if val else "FALSE"
+                elif isinstance(val, (int, float)):
+                    literal = str(val)
+                elif isinstance(val, str):
+                    literal = "'" + val.replace("'", "''") + "'"
+                else:
+                    continue
+                res = conn.execute(text(f'UPDATE "{table_name}" SET "{col.name}" = {literal} WHERE "{col.name}" IS NULL'))
+                if res.rowcount:
+                    backfilled.append(f"{table_name}.{col.name} ({res.rowcount} rows)")
+
+    return {"ok": True, "columns_added": added, "rows_backfilled": backfilled,
+           "message": "Schema synced — no existing data was removed." if (added or backfilled) else
                      "Schema was already up to date — nothing needed adding."}
 
 

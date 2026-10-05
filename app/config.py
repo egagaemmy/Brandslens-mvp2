@@ -24,6 +24,15 @@ APP_URL = env("APP_URL", "https://app.brandslens.com")
 # canonical/OG tags and social share links, which all need the blog's
 # own real, public URL — not the marketing site's.
 BLOG_URL = env("BLOG_URL", "https://blog.brandslens.com")
+MARKETING_URL = env("MARKETING_URL", "https://www.brandslens.com")  # referral links point here, so the visit is recorded on the public site before the visitor ever reaches signup
+
+# Opt-in: when on, a request for a blog page that arrives on the raw hosting
+# address (*.onrender.com) is permanently redirected to the same page on
+# BLOG_URL, so search engines stop indexing the hosting address and consolidate
+# everything on the real blog domain. Off by default on purpose — it's only safe
+# once https://blog.brandslens.com/blog is confirmed to load, because the raw
+# address is the fallback until then.
+REDIRECT_RAW_BLOG_HOST = env("REDIRECT_RAW_BLOG_HOST", "").strip().lower() in ("1", "true", "yes", "on")
 
 # --- Claude (classification + statement drafting) — the one API this needs ---
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")

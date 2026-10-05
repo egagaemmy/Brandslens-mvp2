@@ -266,3 +266,24 @@ def send_payment_failed(to: str, name: str, org_name: str) -> bool:
       <p>We couldn't process your latest payment for <b>{org_name}</b>. Please update your
       billing details to avoid any interruption to your monitoring.</p>""")
     return send_email(to, "Action needed: BrandsLens payment failed", body)
+
+
+def send_referrer_welcome_email(name: str, to: str, code: str, referral_link: str, portal_url: str,
+                                rate_percent: float) -> bool:
+    """Sent when someone joins as a referrer, or when an admin creates an
+    agent for them. The private portal link is delivered by email only —
+    that's what proves the person actually controls the address, since
+    anyone who holds this link can see (and edit payout details for) this
+    referrer's earnings."""
+    first_name = name.split(" ")[0] if name else "there"
+    body = f"""<p>Hi {first_name},</p>
+      <p>You're set up to earn <strong>{rate_percent:g}%</strong> of the first payment from every customer you
+      bring to BrandsLens.</p>
+      <p><strong>Your personal referral link</strong> (share this anywhere):<br>
+      <a href="{referral_link}">{referral_link}</a><br>
+      Your code: <strong>{code}</strong></p>
+      <p><strong>Your private earnings page</strong> — keep this link to yourself, it's how you check your sales
+      and add your payout details:<br>
+      <a href="{portal_url}">{portal_url}</a></p>
+      <p>Anyone who signs up through your link within 60 days is credited to you.<br>The BrandsLens Team</p>"""
+    return send_email(to, "Your BrandsLens referral link", _wrap(body))

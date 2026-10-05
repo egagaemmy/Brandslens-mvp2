@@ -176,6 +176,56 @@ class PendingSignup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     completed_token: Mapped[str] = mapped_column(String(64), nullable=True)
     completed_member_id: Mapped[str] = mapped_column(String(36), nullable=True)
+    referral_code: Mapped[str] = mapped_column(String(20), default="")  # validated at checkout; the commission itself is only created once payment is confirmed
+
+
+class Referrer(Base):
+    """Anyone who can earn a commission for bringing in a paying customer —
+    an existing subscriber, a company, or a freelance sales agent who has
+    no BrandsLens account at all. Deliberately separate from OrgMember:
+    an agent never needs to log in to anything. They get a public referral
+    code and a private portal_token (a long random secret embedded in a
+    link, emailed to them) that lets them see their own earnings."""
+    __tablename__ = "referrers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(12), default="individual")  # individual | corporate
+    company: Mapped[str] = mapped_column(String(200), default="")
+    source: Mapped[str] = mapped_column(String(10), default="self")  # self | admin | member
+    portal_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    payout_details: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(10), default="active")  # active | disabled
+    member_id: Mapped[str] = mapped_column(String(36), nullable=True)
+    last_emailed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class ReferralCommission(Base):
+    """One commission, for one referred customer's FIRST payment — the
+    unique constraint on organization_id is what enforces 'first payment
+    only' at the database level, and also what makes a retried webhook
+    harmless (a second insert for the same organization simply can't
+    happen). rate_percent and the amounts are snapshotted at creation, so
+    changing the commission rate later never rewrites history."""
+    __tablename__ = "referral_commissions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    referrer_id: Mapped[str] = mapped_column(ForeignKey("referrers.id"), index=True)
+    organization_id: Mapped[str] = mapped_column(String(36), unique=True)
+    organization_name: Mapped[str] = mapped_column(String(200), default="")
+    payment_ref: Mapped[str] = mapped_column(String(200), default="")
+    amount_paid: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    rate_percent: Mapped[float] = mapped_column(Float)
+    commission: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(10), default="pending")  # pending | approved | paid | void
+    approvable_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class SessionToken(Base):

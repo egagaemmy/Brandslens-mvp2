@@ -340,6 +340,13 @@ def recover_pending_signup_by_tx_ref(db: Session, tx_ref: str) -> dict:
     pending.completed_token = token
     pending.completed_member_id = member.id
     db.commit()
+    try:
+        from . import referrals
+        referrals.record_first_payment_commission(
+            db, member.organization_id, pending.company, pending.email, pending.referral_code,
+            data.get("amount", 0), data.get("currency", "USD"), str(data.get("id", tx_ref)))
+    except Exception:  # noqa: BLE001
+        log.exception("Referral commission failed during recovery of %s (account itself was recovered fine)", tx_ref)
     log.info("Recovered pending signup %s via manual admin recovery: organization_id=%s", tx_ref, member.organization_id)
     return {"ok": True, "member_email": member.email, "organization_id": member.organization_id}
 
@@ -586,6 +593,16 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
                         org_id = member.organization_id
                         db.commit()
                         log.info("Real account created from pending signup %s: organization_id=%s", pending_signup_id, org_id)
+                        # First verified payment from a referred customer: record the
+                        # referrer's commission. Wrapped separately so that nothing
+                        # about referrals can ever disturb a real, paid account.
+                        try:
+                            from . import referrals
+                            referrals.record_first_payment_commission(
+                                db, org_id, pending.company, pending.email, pending.referral_code,
+                                data.get("amount", 0), data.get("currency", "USD"), str(data.get("id", "")))
+                        except Exception:  # noqa: BLE001
+                            log.exception("Referral commission failed for pending signup %s (account itself was created fine)", pending_signup_id)
                     except Exception:  # noqa: BLE001 — a failure here must never silently swallow a real payment
                         log.exception("Failed to create account from pending signup %s after confirmed payment", pending_signup_id)
                 else:

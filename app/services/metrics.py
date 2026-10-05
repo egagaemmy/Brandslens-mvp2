@@ -53,7 +53,7 @@ def calculate_ave(incidents: list[Incident], workspace: Workspace) -> dict:
         by_severity[inc.severity] += value
     return {
         "total": round(total, 2),
-        "currency": workspace.ave_currency,
+        "currency": workspace.ave_currency or "USD",
         "mention_count": len(incidents),
         "cpm_rate": workspace.ave_cpm_rate,
         "multiplier": workspace.ave_multiplier,
