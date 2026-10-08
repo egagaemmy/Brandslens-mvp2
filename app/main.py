@@ -37,6 +37,8 @@ app = FastAPI(title=APP_NAME)
 from .routes_referrals import router as referrals_router  # noqa: E402
 from .services import referrals as referrals_svc  # noqa: E402
 app.include_router(referrals_router)
+from .routes_guides import router as guides_router  # noqa: E402
+app.include_router(guides_router)
 log = logging.getLogger("main")
 # CORS deliberately does NOT rely solely on FRONTEND_ORIGIN — that variable
 # is also used elsewhere for a different purpose (the "back to homepage"
@@ -451,7 +453,9 @@ def _run_full_scan(ws_id: str) -> None:
 
 
 @app.post("/api/scan/{ws_id}")
-def trigger_scan(tasks: BackgroundTasks, ws: Workspace = Depends(owned_workspace)) -> dict:
+def trigger_scan(tasks: BackgroundTasks, ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> dict:
+    if db.get(Organization, ws.organization_id).is_demo:   # demo workspace: same reply, no real scan
+        return {"ok": True, "message": "Scan started across all configured sources"}
     tasks.add_task(_run_full_scan, ws.id)
     return {"ok": True, "message": "Scan started across all configured sources"}
 
@@ -519,7 +523,8 @@ def trigger_historical_scan(body: HistoricalScanBody, tasks: BackgroundTasks,
     if body.days_back > max_days:
         raise HTTPException(422, f"Your plan allows historical search up to {max_days // 365} years back. "
                             f"Upgrade for a wider range.")
-    tasks.add_task(_run_historical_scan, ws.id, body.days_back)
+    if not org.is_demo:   # demo workspace: same reply, no real search
+        tasks.add_task(_run_historical_scan, ws.id, body.days_back)
     supported = [m.__name__.split(".")[-1].replace("_collector", "") for m in COLLECTORS
                 if m.__name__.split(".")[-1] in HISTORICAL_CAPABLE]
     return {"ok": True, "message": f"Historical search started, going back {body.days_back} days.",
@@ -1206,6 +1211,28 @@ def setup_sync_schema(secret: str, db: Session = Depends(get_db)) -> dict:
                      "Schema was already up to date — nothing needed adding."}
 
 
+@app.get("/api/setup/seed-demo")
+def setup_seed_demo(secret: str, reset: bool = False, db: Session = Depends(get_db)) -> dict:
+    """Creates the fictional Acme Foods demo accounts used to record the
+    tutorial videos (see services/demo_seed.py). Safe to call twice: without
+    reset=true it refuses to touch existing demo accounts. The generated
+    passwords are in the response, once. Same secret as the other setup routes."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    from .services import demo_seed
+    return demo_seed.seed_demo(db, reset=reset)
+
+
+@app.get("/api/setup/remove-demo")
+def setup_remove_demo(secret: str, db: Session = Depends(get_db)) -> dict:
+    """Deletes every demo account and everything attached to it. Only ever
+    touches organizations flagged is_demo, so a real customer cannot be hit."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    from .services import demo_seed
+    return demo_seed.remove_demo(db)
+
+
 @app.get("/api/setup/backfill-rss-feeds")
 def setup_backfill_rss_feeds(secret: str, db: Session = Depends(get_db)) -> dict:
     """Temporary, one-time-use route — the default RSS feed list only ever
@@ -1742,7 +1769,7 @@ def admin_list_subscribers(member: OrgMember = Depends(active_member), db: Sessi
     so you can see at a glance how many subscribers you have and who
     they are, without digging through the raw database directly."""
     _require_exempt(member, db)
-    orgs = db.scalars(select(Organization).where(Organization.billing_status != "exempt").order_by(Organization.created_at.desc())).all()
+    orgs = db.scalars(select(Organization).where(Organization.billing_status != "exempt", Organization.is_demo.isnot(True)).order_by(Organization.created_at.desc())).all()
     subscribers = []
     for org in orgs:
         owner = db.scalar(select(OrgMember).where(OrgMember.organization_id == org.id, OrgMember.role == "owner"))
@@ -2302,7 +2329,9 @@ def _run_competitor_scan(ws_id: str) -> None:
 
 
 @app.post("/api/workspaces/{ws_id}/competitors/scan")
-def trigger_competitor_scan(tasks: BackgroundTasks, ws: Workspace = Depends(owned_workspace)) -> dict:
+def trigger_competitor_scan(tasks: BackgroundTasks, ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> dict:
+    if db.get(Organization, ws.organization_id).is_demo:
+        return {"ok": True, "message": "Competitor scan started"}
     tasks.add_task(_run_competitor_scan, ws.id)
     return {"ok": True, "message": "Competitor scan started"}
 

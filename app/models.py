@@ -60,6 +60,7 @@ class Organization(Base):
     paid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     billing_cycle: Mapped[str] = mapped_column(String(10), default="")  # "annual" | "monthly" | "daily" — set on every real charge, used to size a sensible "about to expire" warning window
     expiry_warning_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)  # reset to null on every fresh charge, so each new period gets its own warning
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)  # a fictional demo account used to record tutorial videos: never scanned, never emailed, never counted as a subscriber
     expiry_notice_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)  # same idea, for the "has expired" notice
     # Only meaningful for a one-time, multi-period purchase (quantity > 1 at
     # checkout) — a customer who pays for 3 months up front isn't on a

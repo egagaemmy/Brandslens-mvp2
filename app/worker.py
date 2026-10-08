@@ -29,7 +29,9 @@ log = logging.getLogger("worker")
 
 
 def _each_workspace(db):
-    return db.scalars(select(Workspace).where(Workspace.active == True)).all()  # noqa: E712
+    from .models import Organization
+    return db.scalars(select(Workspace).join(Organization, Organization.id == Workspace.organization_id)
+                      .where(Workspace.active == True, Organization.is_demo.isnot(True))).all()   # NULL counts as not demo: a real customer must never be skipped
 
 
 def run_collector(name: str, collect_fn) -> None:

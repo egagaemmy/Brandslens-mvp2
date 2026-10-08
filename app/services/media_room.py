@@ -105,8 +105,13 @@ def send_escalation(db: Session, case: MediaRoomCase, template_key: str, recipie
     that trail exists specifically to prove what actually happened here."""
     from ..models import EscalationLog
     from .mailer import send_email
+    from ..models import Workspace, Organization
+    ws = db.get(Workspace, case.workspace_id)
+    org = db.get(Organization, ws.organization_id) if ws else None
     email_sent = False
-    if recipient_email:
+    if org is not None and org.is_demo:
+        email_sent = True   # demo account: logged exactly like a real send, but nothing leaves the building
+    elif recipient_email:
         html = f"<p>{body}</p>".replace("\n", "<br>")
         email_sent = send_email(recipient_email, subject, html)
     log_entry = EscalationLog(case_id=case.id, workspace_id=case.workspace_id, template_key=template_key,
@@ -128,7 +133,10 @@ def sweep_sla_breaches(db: Session) -> list[MediaRoomCase]:
     """Run on a schedule (see worker.py). Marks lapsed cases so the caller can
     fire a second-tier alert — a HIGH case with no action for 4 hours is itself
     a signal something is wrong with the process, not just the underlying threat."""
-    open_cases = db.scalars(select(MediaRoomCase).where(MediaRoomCase.state.notin_(["sent", "closed"]))).all()
+    from ..models import Workspace, Organization
+    demo_ws = select(Workspace.id).join(Organization, Organization.id == Workspace.organization_id).where(Organization.is_demo == True)  # noqa: E712
+    open_cases = db.scalars(select(MediaRoomCase).where(MediaRoomCase.state.notin_(["sent", "closed"]),
+                                                         MediaRoomCase.workspace_id.notin_(demo_ws))).all()
     breached = []
     for case in open_cases:
         if sla_remaining_hours(case) <= 0 and not case.sla_breached_at:
