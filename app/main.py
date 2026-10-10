@@ -21,7 +21,7 @@ from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session
 
 from .db import get_db, init_db
-from .config import FRONTEND_ORIGIN, BLOG_URL, APP_NAME, ADMIN_SETUP_SECRET, REDIRECT_RAW_BLOG_HOST
+from .config import FRONTEND_ORIGIN, BLOG_URL, APP_NAME, ADMIN_SETUP_SECRET, REDIRECT_RAW_BLOG_HOST, REDIRECT_RAW_LEGAL_HOST, MARKETING_URL
 from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
@@ -74,6 +74,8 @@ async def keep_raw_host_out_of_search(request: Request, call_next):
     on_raw_host = host.endswith(".onrender.com")
     if on_raw_host and REDIRECT_RAW_BLOG_HOST and request.method in ("GET", "HEAD") and (path == "/blog" or path.startswith("/blog/")):
         return RedirectResponse(url=f"{BLOG_URL}{path}", status_code=301)
+    if on_raw_host and REDIRECT_RAW_LEGAL_HOST and request.method in ("GET", "HEAD") and path in ("/legal/terms", "/legal/privacy"):
+        return RedirectResponse(url=f"{MARKETING_URL}{path}", status_code=301)
     response = await call_next(request)
     if on_raw_host and path.startswith("/legal/"):
         response.headers["X-Robots-Tag"] = "noindex"
@@ -1484,20 +1486,40 @@ table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #E2E8F0;pad
 </body></html>"""
 
 
+def _legal_text(db: Session, doc: str) -> tuple[str, str]:
+    """(title, markdown) for a legal document: whatever an admin last saved in
+    Super Admin, otherwise the built in text. One source for every place the
+    text is shown, so the raw page and the brandslens.com page never differ."""
+    from .legal_content import TERMS_OF_SERVICE, PRIVACY_POLICY
+    from .services.settings import get_setting
+    if doc == "terms":
+        return "Terms of Service", get_setting(db, "legal:terms_of_service", TERMS_OF_SERVICE)
+    if doc == "privacy":
+        return "Privacy Policy", get_setting(db, "legal:privacy_policy", PRIVACY_POLICY)
+    raise HTTPException(404, "Not found")
+
+
 @app.get("/legal/terms", response_class=HTMLResponse)
 def legal_terms(db: Session = Depends(get_db)) -> str:
-    from .legal_content import TERMS_OF_SERVICE
-    from .services.settings import get_setting
-    content = get_setting(db, "legal:terms_of_service", TERMS_OF_SERVICE)
-    return _render_legal_page(content, "Terms of Service")
+    title, text = _legal_text(db, "terms")
+    return _render_legal_page(text, title)
 
 
 @app.get("/legal/privacy", response_class=HTMLResponse)
 def legal_privacy(db: Session = Depends(get_db)) -> str:
-    from .legal_content import PRIVACY_POLICY
-    from .services.settings import get_setting
-    content = get_setting(db, "legal:privacy_policy", PRIVACY_POLICY)
-    return _render_legal_page(content, "Privacy Policy")
+    title, text = _legal_text(db, "privacy")
+    return _render_legal_page(text, title)
+
+
+@app.get("/api/public/legal/{doc}")
+def public_legal(doc: str, response: Response, db: Session = Depends(get_db)) -> dict:
+    """The legal text already converted to HTML, for the marketing site to show
+    inside its own pages on brandslens.com. Public, because the text itself is
+    public, and cacheable for a few minutes."""
+    import markdown
+    title, text = _legal_text(db, doc)
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return {"doc": doc, "title": title, "html": markdown.markdown(text, extensions=["extra"])}
 
 
 # ==================================================================

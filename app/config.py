@@ -34,6 +34,13 @@ MARKETING_URL = env("MARKETING_URL", "https://www.brandslens.com")  # referral l
 # address is the fallback until then.
 REDIRECT_RAW_BLOG_HOST = env("REDIRECT_RAW_BLOG_HOST", "").strip().lower() in ("1", "true", "yes", "on")
 
+# Opt-in, like the blog switch above: when on, the Terms and Privacy pages
+# requested on the raw hosting address (*.onrender.com) are permanently sent to
+# the same pages on the real site (MARKETING_URL). Safe to turn on only once
+# https://www.brandslens.com/legal/privacy loads, because until then the raw
+# address is the only copy. Catches old links already out in the world.
+REDIRECT_RAW_LEGAL_HOST = env("REDIRECT_RAW_LEGAL_HOST", "").strip().lower() in ("1", "true", "yes", "on")
+
 # --- Claude (classification + statement drafting) — the one API this needs ---
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
 CLASSIFIER_MODEL = env("CLASSIFIER_MODEL", "claude-haiku-4-5")
