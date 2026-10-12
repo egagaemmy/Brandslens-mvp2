@@ -4,8 +4,8 @@ actually needs to work end to end."""
 from __future__ import annotations
 import json
 import logging
-from anthropic import Anthropic
-from ..config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL
+from ..config import ANTHROPIC_API_KEY
+from . import ai
 
 log = logging.getLogger("classifier")
 
@@ -34,16 +34,11 @@ def classify_batch(brand_name: str, brand_context: str, items: list[dict]) -> li
         log.warning("ANTHROPIC_API_KEY not set — classification skipped, everything defaults to WATCH")
         return [_fallback(i["idx"]) for i in items]
 
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
     payload = json.dumps([{"idx": i["idx"], "platform": i.get("platform", ""), "text": i["text"][:900]}
                          for i in items], ensure_ascii=False)
     try:
-        resp = client.messages.create(
-            model=CLASSIFIER_MODEL, max_tokens=1500, system=SYSTEM,
-            messages=[{"role": "user", "content":
-                f"Brand: {brand_name}\nContext: {brand_context}\n\nClassify:\n{payload}"}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        text = ai.complete(SYSTEM, [{"role": "user", "content":
+                f"Brand: {brand_name}\nContext: {brand_context}\n\nClassify:\n{payload}"}], 1500)
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(text)
         # Normalise every idx to int on both sides of this lookup — Claude

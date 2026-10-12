@@ -61,7 +61,7 @@ def generate_executive_summary(workspace: Workspace, incidents: list[Incident]) 
     ANTHROPIC_API_KEY isn't configured or the call fails — a report should
     never fail to generate just because the AI layer is unavailable."""
     from collections import Counter
-    from ..config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL
+    from ..config import ANTHROPIC_API_KEY
 
     sev = Counter(i.severity for i in incidents)
     sent = Counter(i.sentiment for i in incidents if i.sentiment)
@@ -82,23 +82,19 @@ def generate_executive_summary(workspace: Workspace, incidents: list[Incident]) 
         return fallback
 
     try:
-        from anthropic import Anthropic
-        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        from . import ai
         stats = (f"Brand: {workspace.name}\nTotal mentions: {len(incidents)}\n"
                 f"Severity: {dict(sev)}\nSentiment: {dict(sent)}\n"
                 f"Platforms: {dict(platform.most_common(6))}\nTags: {dict(tags)}\n"
                 f"Sample HIGH severity items: " +
                 "; ".join(f"[{i.platform}] {i.title[:150]}" for i in high_incidents))
-        resp = client.messages.create(
-            model=CLASSIFIER_MODEL, max_tokens=500,
-            system="You write concise executive summaries for a brand reputation monitoring report. "
+        text = ai.complete(
+            "You write concise executive summaries for a brand reputation monitoring report. "
                   "Respond ONLY with a JSON object: {\"overview\": \"...\", \"insights\": \"...\", "
                   "\"recommendations\": \"...\"} — each value 2-4 plain sentences, no markdown, no bullet "
                   "characters. Be specific to the actual data given, not generic. If there is genuinely "
                   "nothing notable, say so plainly rather than inventing concern.",
-            messages=[{"role": "user", "content": f"Write the executive summary for this data:\n{stats}"}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+            [{"role": "user", "content": f"Write the executive summary for this data:\n{stats}"}], 500)
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         import json
         parsed = json.loads(text)

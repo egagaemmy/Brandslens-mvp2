@@ -43,7 +43,9 @@ REDIRECT_RAW_LEGAL_HOST = env("REDIRECT_RAW_LEGAL_HOST", "").strip().lower() in 
 
 # --- Claude (classification + statement drafting) — the one API this needs ---
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
-CLASSIFIER_MODEL = env("CLASSIFIER_MODEL", "claude-haiku-4-5")
+# The model every AI feature uses first. If it is unavailable, services/ai.py tries the next
+# current model automatically, so a retired model name no longer silently breaks the product.
+CLASSIFIER_MODEL = env("CLASSIFIER_MODEL", "claude-haiku-5-5")
 
 # --- Free / no-approval collectors ---
 YOUTUBE_API_KEY = env("YOUTUBE_API_KEY")                # console.cloud.google.com, instant key, generous free quota

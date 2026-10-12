@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, HTMLResponse, RedirectResponse
+from fastapi.responses import Response, HTMLResponse, RedirectResponse, FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session
@@ -1137,6 +1137,17 @@ def app_chat(ws_id: str, body: AppChatBody, ws: Workspace = Depends(owned_worksp
 
 
 
+@app.get("/api/setup/ai-check")
+def setup_ai_check(secret: str) -> dict:
+    """Tells you exactly why the AI features are not answering: whether the key is present and
+    accepted, whether there is credit, and which model names work. Same secret as the other setup
+    routes. Makes one tiny test call per candidate model, and never reveals the key itself."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    from .services import ai
+    return ai.check()
+
+
 @app.get("/api/setup/sync-schema")
 def setup_sync_schema(secret: str, db: Session = Depends(get_db)) -> dict:
     """Temporary, one-time-use route — safely brings the live database up to
@@ -1461,6 +1472,28 @@ def export_newsletter_csv(member: OrgMember = Depends(active_member), db: Sessio
                     headers={"Content-Disposition": 'attachment; filename="brandslens-newsletter-subscribers.csv"'})
 
 
+
+# --- The BrandsLens icon, for pages this server renders itself (the blog and the legal pages) ---
+# Served from the same host as the page, so it works on blog.brandslens.com and on any other address
+# this backend answers on, rather than depending on a file that lives on another site.
+_ICON_DIR = __import__("pathlib").Path(__file__).resolve().parent / "static" / "icons"
+_ICON_FILES = {"/favicon.ico": ("favicon.ico", "image/x-icon"), "/favicon-32.png": ("favicon-32.png", "image/png"),
+               "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png")}
+
+def _icon_route(path: str):
+    name, media = _ICON_FILES[path]
+    def handler() -> FileResponse:
+        return FileResponse(_ICON_DIR / name, media_type=media, headers={"Cache-Control": "public, max-age=604800"})
+    handler.__name__ = "icon_" + name.replace(".", "_").replace("-", "_")
+    return handler
+
+for _path in _ICON_FILES:
+    app.add_api_route(_path, _icon_route(_path), methods=["GET"], include_in_schema=False)
+
+ICON_LINKS = ('<link rel="icon" href="/favicon.ico" sizes="any">\n'
+              '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">\n'
+              '<link rel="apple-touch-icon" href="/apple-touch-icon.png">')
+
 def _render_legal_page(markdown_text: str, title: str) -> str:
     import markdown
     body_html = markdown.markdown(markdown_text, extensions=["extra"])
@@ -1468,7 +1501,7 @@ def _render_legal_page(markdown_text: str, title: str) -> str:
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — BrandsLens</title>
-<link rel="icon" href="{home_link}/favicon.ico">
+{ICON_LINKS}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -1537,7 +1570,7 @@ def _blog_page_wrapper(title: str, meta_description: str, canonical_path: str, b
 <title>{title}</title>
 <meta name="description" content="{meta_description}">
 <link rel="canonical" href="{BLOG_URL}{canonical_path}">
-<link rel="icon" href="{home_link}/favicon.ico">
+{ICON_LINKS}
 <meta property="og:type" content="article">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{meta_description}">

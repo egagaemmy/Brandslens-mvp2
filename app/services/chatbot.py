@@ -15,8 +15,8 @@ import time
 import logging
 from collections import defaultdict, deque
 
-from anthropic import Anthropic
-from ..config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL
+from ..config import ANTHROPIC_API_KEY
+from . import ai
 from ..branding import BRAND
 
 log = logging.getLogger("chatbot")
@@ -84,6 +84,34 @@ def check_rate_limit(client_ip: str) -> bool:
     return True
 
 
+def _build_messages(history: list[dict] | None, message: str) -> list[dict]:
+    """The last few turns plus the new message, in a shape the API accepts. The API requires the
+    first message to be from the user. Trimming a long chat to its last six turns could leave an
+    assistant turn first, which made every question in a longer conversation fail."""
+    turns = []
+    for turn in (history or [])[-6:]:  # cap history so a long chat can't balloon token usage
+        role, content = turn.get("role"), turn.get("content", "")
+        if role in ("user", "assistant") and content:
+            turns.append({"role": role, "content": str(content)[:2000]})
+    while turns and turns[0]["role"] != "user":
+        turns.pop(0)
+    # The Ask screen sends the question it is asking as the last turn of the history AND as the
+    # message itself, so without this every question reached the model twice.
+    if not (turns and turns[-1]["role"] == "user" and turns[-1]["content"].strip() == message.strip()):
+        turns.append({"role": "user", "content": message.strip()})
+    return turns
+
+
+def _unavailable_message(kind: str) -> str:
+    """What the person is told. Honest about the situation without exposing internals; the real
+    cause (key, credit, model) is logged and shown by /api/setup/ai-check."""
+    if kind == "rate_limit":
+        return "I'm getting a lot of questions at the moment. Please try again in a minute."
+    if kind in ("connection", "overloaded"):
+        return "I couldn't reach my analysis service just now. Please try again in a moment."
+    return "This assistant is temporarily unavailable. Please try again later, or contact support if it continues."
+
+
 def answer_app_chat(message: str, history: list[dict], workspace_name: str, mode: str, stats: dict) -> str:
     """The in-app 'Ask BrandsLens' copilot — a completely different system
     from the public marketing bot above. This one is authenticated, scoped
@@ -117,22 +145,14 @@ Current workspace data:
 Keep answers to a few sentences unless the question genuinely calls for more detail. Never discuss other \
 customers' data, internal system architecture, or anything outside this workspace's own monitoring."""
 
-    messages = []
-    for turn in (history or [])[-6:]:
-        role = turn.get("role")
-        content = turn.get("content", "")
-        if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content[:2000]})
-    messages.append({"role": "user", "content": message.strip()})
-
     try:
-        client = Anthropic(api_key=ANTHROPIC_API_KEY)
-        resp = client.messages.create(model=CLASSIFIER_MODEL, max_tokens=500, system=system, messages=messages)
-        return "".join(b.text for b in resp.content if b.type == "text").strip() or \
+        return ai.complete(system, _build_messages(history, message), 500) or \
             "I couldn't quite form an answer to that — could you rephrase?"
+    except ai.AIUnavailable as exc:
+        return _unavailable_message(exc.kind)
     except Exception:  # noqa: BLE001
-        log.exception("In-app chat call failed")
-        return "Something went wrong on my end — please try again in a moment."
+        log.exception("In-app chat call failed unexpectedly")
+        return _unavailable_message("other")
 
 
 def answer(message: str, history: list[dict] | None = None) -> str:
@@ -144,21 +164,11 @@ def answer(message: str, history: list[dict] | None = None) -> str:
     if len(message) > 2000:
         return "That's a lot to take in at once — could you ask in a shorter message?"
 
-    messages = []
-    for turn in (history or [])[-6:]:  # cap history so a long chat can't balloon token usage
-        role = turn.get("role")
-        content = turn.get("content", "")
-        if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content[:2000]})
-    messages.append({"role": "user", "content": message.strip()})
-
     try:
-        client = Anthropic(api_key=ANTHROPIC_API_KEY)
-        resp = client.messages.create(
-            model=CLASSIFIER_MODEL, max_tokens=400, system=SYSTEM_PROMPT, messages=messages,
-        )
-        return "".join(block.text for block in resp.content if hasattr(block, "text")).strip() or \
+        return ai.complete(SYSTEM_PROMPT, _build_messages(history, message), 400) or \
             "I couldn't quite form an answer to that — could you rephrase?"
+    except ai.AIUnavailable as exc:
+        return _unavailable_message(exc.kind)
     except Exception:  # noqa: BLE001
-        log.exception("Chatbot call failed")
-        return "Something went wrong on my end — please try again in a moment."
+        log.exception("Chatbot call failed unexpectedly")
+        return _unavailable_message("other")
