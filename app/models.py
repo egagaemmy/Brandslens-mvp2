@@ -100,6 +100,7 @@ class OrgMember(Base):
     country: Mapped[str] = mapped_column(String(120), default="")
     job_title: Mapped[str] = mapped_column(String(160), default="")
     email_alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    demo_viewer: Mapped[bool] = mapped_column(Boolean, default=False, nullable=True)  # the shared public-demo visitor: can look at everything, change nothing. NULL counts as not a demo visitor.
 
     organization: Mapped["Organization"] = relationship(back_populates="members")
 
@@ -581,3 +582,108 @@ class TipLineMessage(Base):
     forwarded_from: Mapped[str] = mapped_column(String(200), default="")  # original sender if it's a forward
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     incident_id: Mapped[str] = mapped_column(String(36), default="")      # set once triaged
+
+
+class PromoCode(Base):
+    """A launch offer code, for example PH15 for the Product Hunt launch.
+
+    One code per platform, so attribution works even when a visitor's tracking
+    link is lost. The discount is a percentage off the FIRST year of an annual
+    plan only (see services/promos.py for the exact rules). valid_from and
+    valid_until are UTC; max_redemptions NULL means unlimited."""
+    __tablename__ = "promo_codes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    code: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+    percent: Mapped[int] = mapped_column(Integer, default=15)
+    platform: Mapped[str] = mapped_column(String(60), default="")      # for example "Product Hunt", shown in the launch report
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    max_redemptions: Mapped[int] = mapped_column(Integer, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class SignupAttribution(Base):
+    """Where a paying customer came from, and what offer they used.
+
+    Written when a prospect starts checkout (status "started") and updated when
+    the payment webhook proves the payment (status "paid", with the real account
+    id). It is the single source of truth for the launch report: signups and
+    revenue per platform and per code. It stores no IP address and no browser
+    fingerprint, only the campaign tags the visitor arrived with."""
+    __tablename__ = "signup_attributions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    pending_signup_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    organization_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    email: Mapped[str] = mapped_column(String(320), default="")
+    utm_source: Mapped[str] = mapped_column(String(60), default="", index=True)
+    utm_medium: Mapped[str] = mapped_column(String(60), default="")
+    utm_campaign: Mapped[str] = mapped_column(String(80), default="")
+    utm_term: Mapped[str] = mapped_column(String(80), default="")
+    utm_content: Mapped[str] = mapped_column(String(80), default="")
+    session_id: Mapped[str] = mapped_column(String(40), default="")
+    plan: Mapped[str] = mapped_column(String(20), default="")
+    cycle: Mapped[str] = mapped_column(String(10), default="")
+    promo_code: Mapped[str] = mapped_column(String(24), default="", index=True)
+    discount_percent: Mapped[int] = mapped_column(Integer, default=0)
+    discount_amount: Mapped[float] = mapped_column(Float, default=0.0)   # in the charge currency
+    charged_amount: Mapped[float] = mapped_column(Float, default=0.0)    # what the customer is asked to pay
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    status: Mapped[str] = mapped_column(String(12), default="started")   # started | paid
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LaunchEvent(Base):
+    """One anonymous step in the launch funnel: a visit to the launch page, a click on the demo or on
+    Start now. The session id is a random value in the visitor's own cookie. No IP address is stored."""
+    __tablename__ = "launch_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)           # visit | demo_click | demo_start | cta_click
+    session_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    utm_source: Mapped[str] = mapped_column(String(60), default="", index=True)
+    utm_medium: Mapped[str] = mapped_column(String(60), default="")
+    utm_campaign: Mapped[str] = mapped_column(String(80), default="")
+    utm_term: Mapped[str] = mapped_column(String(80), default="")
+    utm_content: Mapped[str] = mapped_column(String(80), default="")
+    path: Mapped[str] = mapped_column(String(120), default="")
+
+
+class TrackingTag(Base):
+    """An ad or analytics tag (Meta Pixel, Google tag, LinkedIn Insight, X, TikTok and so on) managed from Super Admin.
+
+    Only the tag's ID is stored, and it is validated against that platform's own ID format, so no script code is ever stored
+    or injected. The websites read the enabled tags at run time (see services/tracking.py), so adding or changing one never needs
+    a deployment. scope is "marketing" (the marketing site), "app" (the app's public sign-up pages only) or "both"."""
+    __tablename__ = "tracking_tags"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(String(30), index=True)
+    label: Mapped[str] = mapped_column(String(80), default="")
+    tag_id: Mapped[str] = mapped_column(String(60))
+    scope: Mapped[str] = mapped_column(String(12), default="marketing")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    events: Mapped[str] = mapped_column(String(400), default="")        # optional per-platform conversion ids, as JSON
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_by: Mapped[str] = mapped_column(String(320), default="")
+
+
+class UtmLink(Base):
+    """A saved campaign link from the UTM builder, so the team shares one list of every tracking link in use."""
+    __tablename__ = "utm_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    destination: Mapped[str] = mapped_column(String(300))
+    utm_source: Mapped[str] = mapped_column(String(80))
+    utm_medium: Mapped[str] = mapped_column(String(80), default="")
+    utm_campaign: Mapped[str] = mapped_column(String(80), default="")
+    utm_term: Mapped[str] = mapped_column(String(80), default="")
+    utm_content: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    created_by: Mapped[str] = mapped_column(String(320), default="")

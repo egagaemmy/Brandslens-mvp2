@@ -294,9 +294,9 @@ def authenticate(db: Session, email: str, password: str) -> tuple[OrgMember, str
     return member, token
 
 
-def issue_session(db: Session, member: OrgMember) -> str:
+def issue_session(db: Session, member: OrgMember, ttl: timedelta | None = None) -> str:
     token = secrets.token_urlsafe(32)
-    db.add(SessionToken(member_id=member.id, token=token, expires_at=now_utc() + timedelta(days=SESSION_TTL_DAYS)))
+    db.add(SessionToken(member_id=member.id, token=token, expires_at=now_utc() + (ttl or timedelta(days=SESSION_TTL_DAYS))))
     db.commit()
     return token
 

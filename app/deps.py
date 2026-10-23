@@ -3,7 +3,8 @@ on current_member (or require_role(...)) rather than trusting anything in the
 request body about who the caller is or what organization they belong to.
 """
 from __future__ import annotations
-from fastapi import Depends, HTTPException, Header
+import re
+from fastapi import Depends, HTTPException, Header, Request
 from sqlalchemy.orm import Session
 
 from .db import get_db
@@ -11,13 +12,41 @@ from .services.auth import member_from_token
 from .models import OrgMember, Workspace, Organization, now_utc, aware
 
 
-def current_member(authorization: str = Header(default=""), db: Session = Depends(get_db)) -> OrgMember:
+# ---- The public demo is READ-ONLY, enforced here on the server. ----
+# Every protected route depends on current_member, so this one check covers all of them, including any route added later.
+# The browser is never trusted to hide a button: a demo visitor's request to change anything is refused here.
+DEMO_MESSAGE = "This is a read-only demo of BrandsLens. Start monitoring to do this with your own brand."
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+# The only writes a demo visitor may make. Each is harmless in a demo workspace: scans and historical searches answer
+# without scanning, the competitor scan is a no-op, and AI Draft and Ask BrandsLens return fixed sample answers (no AI spend).
+DEMO_ALLOWED_WRITES = [re.compile(p) for p in (
+    r"^/api/auth/logout$",
+    r"^/api/scan/[^/]+$",
+    r"^/api/scan/[^/]+/historical$",
+    r"^/api/workspaces/[^/]+/competitors/scan$",
+    r"^/api/media-room/ai-draft$",
+    r"^/api/app-chat/[^/]+$",
+)]
+
+
+def demo_write_blocked(member: OrgMember, method: str, path: str) -> bool:
+    """True when this is a demo visitor trying to change something they may not."""
+    if not getattr(member, "demo_viewer", False):
+        return False
+    if method.upper() in _SAFE_METHODS:
+        return False
+    return not any(p.match(path) for p in DEMO_ALLOWED_WRITES)
+
+
+def current_member(request: Request, authorization: str = Header(default=""), db: Session = Depends(get_db)) -> OrgMember:
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
         raise HTTPException(401, "Missing bearer token")
     member = member_from_token(db, token)
     if not member:
         raise HTTPException(401, "Invalid or expired session")
+    if demo_write_blocked(member, request.method, request.url.path):
+        raise HTTPException(403, DEMO_MESSAGE, headers={"X-Demo-Readonly": "1"})
     return member
 
 

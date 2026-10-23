@@ -183,6 +183,16 @@ def verify_chain(db: Session, case_id: str) -> bool:
     return True
 
 
+def sample_draft(brand_name: str, incident_summary: str) -> str:
+    """The fixed example shown in the public demo instead of a live AI call (no cost, nothing to abuse)."""
+    return (f"[SAMPLE DRAFT. In your own workspace, AI writes this from the details of the case for you to edit.]\n\n"
+            f"Regarding: {incident_summary}\n\n"
+            f"We are aware of the reports circulating about {brand_name} and are treating them as a priority. "
+            f"We will share verified information as soon as we have it. Anyone who may have been affected is asked to "
+            f"contact us directly through our official channels.\n\n"
+            f"[Placeholder: legal and compliance review required before this is published.]")
+
+
 def draft_statement_ai(brand_name: str, incident_summary: str, template_type: str) -> str:
     """Optional AI-assisted draft via Claude. Deliberately constrained: drafts
     only, never claims resolution or fault, always flags for human review."""

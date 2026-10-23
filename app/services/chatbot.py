@@ -112,6 +112,44 @@ def _unavailable_message(kind: str) -> str:
     return "This assistant is temporarily unavailable. Please try again later, or contact support if it continues."
 
 
+def _short(text: str, limit: int = 72) -> str:
+    """A title shortened at a word boundary, never mid-word."""
+    t = (text or "").strip()
+    return t if len(t) <= limit else t[:limit].rsplit(" ", 1)[0].rstrip(",;:.") + "…"
+
+
+def demo_app_chat_reply(message: str, brand: str, severity: dict, platforms: dict, high_titles: list[str],
+                        sentiment: dict | None = None, negative_platforms: dict | None = None,
+                        negative_titles: list[str] | None = None) -> str:
+    """The fixed, honest answer the public demo gives instead of calling the AI (no cost, nothing to abuse).
+    Built from the demo workspace's own numbers, so it reads like a real answer to a real question."""
+    m = (message or "").lower()
+    total = sum(severity.values())
+    top = ", ".join(f"{p} ({n})" for p, n in sorted(platforms.items(), key=lambda kv: -kv[1])[:3]) or "a mix of platforms"
+    tail = "\n\n(Demo answer. In your own workspace, Ask BrandsLens answers any question from your real mentions.)"
+    if any(w in m for w in ("sentiment", "negative", "driving", "tone", "mood")):
+        neg = (sentiment or {}).get("Negative", 0)
+        pct = round(100 * neg / total) if total else 0
+        ranked = sorted((negative_platforms or {}).items(), key=lambda kv: -kv[1])
+        where = ", ".join(f"{p} ({n})" for p, n in ranked[:3]) or "a mix of platforms"
+        concentrated = bool(ranked) and neg > 0 and ranked[0][1] * 100 >= 40 * neg      # one platform holds at least 40% of the negatives
+        out = f"{neg} of {total} recent mentions of {brand} are negative ({pct}%). " + (f"Most of it comes from {where}." if concentrated else f"It is spread across {where}.")
+        examples = "; ".join(f'"{_short(t)}"' for t in (negative_titles or [])[:2])
+        if examples:
+            out += f" What is driving it: {examples}. Those carry the highest severity, so start there."
+        return out + tail
+    if any(w in m for w in ("competitor", "versus", " vs ", "share of voice", "rival")):
+        return (f"{brand} is ahead of its tracked competitors on mention volume, but volume is not the same as health. "
+                f"Open Competitors and compare Sentiment Comparison before you read the leader as the winner." + tail)
+    if any(w in m for w in ("first", "priority", "urgent", "act", "do ")):
+        lead = f' The first to look at: "{high_titles[0][:110]}".' if high_titles else ""
+        return (f"Start with the HIGH severity items, because they carry the shortest response clocks.{lead} "
+                f"Open the case in the Media Room, check its clock, then escalate to the right contact." + tail)
+    return (f"Across {total} recent mentions of {brand}: {severity.get('HIGH', 0)} are HIGH severity, {severity.get('MEDIUM', 0)} are MEDIUM "
+            f"and {severity.get('WATCH', 0)} are WATCH. Most coverage is on {top}. "
+            f"The HIGH items are where to look first." + tail)
+
+
 def answer_app_chat(message: str, history: list[dict], workspace_name: str, mode: str, stats: dict) -> str:
     """The in-app 'Ask BrandsLens' copilot — a completely different system
     from the public marketing bot above. This one is authenticated, scoped

@@ -136,6 +136,35 @@ def remove_demo(db: Session) -> dict:
 
 
 # ------------------------------------------------------------------ creation
+VIEWER_EMAIL = f"visitor.professional@{DEMO_DOMAIN}"
+
+
+def _make_viewer(db: Session, org: Organization) -> OrgMember:
+    """The one shared login behind the public "See the live demo" button. It can look at everything and change nothing
+    (the server refuses its writes, see deps.py). Its password is random and never shown, so it can only be reached
+    through the demo-session endpoint, never typed into the login page."""
+    now = now_utc()
+    v = OrgMember(organization_id=org.id, email=VIEWER_EMAIL, name="Demo Visitor", role="lead", status="active",
+                  job_title="Exploring the demo", password_hash=auth.hash_password(secrets.token_urlsafe(24)),
+                  demo_viewer=True, activated_at=now, invited_at=now, country="Nigeria", city="Lagos")
+    db.add(v)
+    return v
+
+
+def ensure_viewer(db: Session) -> OrgMember | None:
+    """The demo visitor of the Professional demo workspace, created now if an older seeding did not make one.
+    None when there is no Professional demo workspace yet."""
+    org = next((o for o in demo_orgs(db) if o.plan == "professional"), None)
+    if not org:
+        return None
+    viewer = db.scalar(select(OrgMember).where(OrgMember.organization_id == org.id, OrgMember.demo_viewer == True))  # noqa: E712
+    if viewer:
+        return viewer
+    viewer = _make_viewer(db, org)
+    db.commit()
+    return viewer
+
+
 def _make_org(db: Session, plan: str, owner_password: str) -> tuple[Organization, Workspace, OrgMember]:
     now = now_utc()
     org = Organization(name=f"Acme Foods ({plan.title()} demo)", sector="FMCG", plan=plan,
@@ -158,6 +187,8 @@ def _make_org(db: Session, plan: str, owner_password: str) -> tuple[Organization
                       activated_at=now, invited_at=now, country="Nigeria", city="Lagos")
         db.add(m)
         if role == "owner": owner = m
+    if plan == "professional":
+        _make_viewer(db, org)
     db.flush()
     return org, ws, owner
 
@@ -240,27 +271,53 @@ def _make_referral(db: Session, owner: OrgMember) -> None:
     ref.payout_details = "Demo Bank, account 0000000000, Tola Adeyemi"
 
 
+def _seed_plan(db: Session, plan: str) -> dict:
+    """Builds one demo account (organisation, workspace, mentions, cases, contacts, competitors, referral) and saves it."""
+    password = secrets.token_urlsafe(9)
+    org, ws, owner = _make_org(db, plan, password)
+    contacts = []
+    for name, title, local, cat in CONTACTS:
+        c = EscalationContact(workspace_id=ws.id, name=name, title=title, email=f"{local}@{DEMO_DOMAIN}", category=cat)
+        db.add(c); contacts.append(c)
+    db.flush()
+    incidents = _make_incidents(db, ws)
+    _make_cases(db, ws, incidents, contacts)
+    _make_competitors(db, ws, plan)
+    _make_referral(db, owner)
+    db.commit()
+    return {"plan": plan, "email": owner.email, "password": password, "workspace_id": ws.id, "workspace": ws.name}
+
+
+def refresh_public_demo(db: Session) -> dict:
+    """Rebuilds ONLY the Professional demo (the workspace behind the public "See the live demo" button) with fresh dates, so
+    its response clocks always show a realistic time remaining. The Standard and Growth demos are not touched, and the
+    Professional owner keeps the password they already had. Skipped when there is no Professional demo yet."""
+    org = next((o for o in demo_orgs(db) if o.plan == "professional"), None)
+    if org is None:
+        return {"status": "skipped", "reason": "There is no Professional demo workspace to refresh."}
+    members = db.scalars(select(OrgMember).where(OrgMember.organization_id == org.id)).all()
+    kept_hash = next((m.password_hash for m in members if m.role == "owner"), None)
+    emails = [m.email for m in members]
+    ref_ids = [r.id for r in db.scalars(select(Referrer).where(Referrer.email.in_(emails))).all()] if emails else []
+    _cascade_delete(db, Referrer.__table__, ref_ids)
+    _cascade_delete(db, Organization.__table__, [org.id])
+    db.commit()
+    account = _seed_plan(db, "professional")
+    if kept_hash:
+        owner = db.scalar(select(OrgMember).where(OrgMember.email == account["email"]))
+        owner.password_hash = kept_hash
+        db.commit()
+    log.info("Public demo refreshed")
+    return {"status": "refreshed", "workspace_id": account["workspace_id"]}
+
+
 def seed_demo(db: Session, reset: bool = False) -> dict:
     existing = demo_orgs(db)
     if existing and not reset:
         return {"status": "exists", "message": "Demo accounts already exist. Add reset=true to rebuild them with fresh dates and new passwords."}
     if existing:
         remove_demo(db)
-    accounts = []
-    for plan in PLANS:
-        password = secrets.token_urlsafe(9)
-        org, ws, owner = _make_org(db, plan, password)
-        contacts = []
-        for name, title, local, cat in CONTACTS:
-            c = EscalationContact(workspace_id=ws.id, name=name, title=title, email=f"{local}@{DEMO_DOMAIN}", category=cat)
-            db.add(c); contacts.append(c)
-        db.flush()
-        incidents = _make_incidents(db, ws)
-        _make_cases(db, ws, incidents, contacts)
-        _make_competitors(db, ws, plan)
-        _make_referral(db, owner)
-        db.commit()
-        accounts.append({"plan": plan, "email": owner.email, "password": password, "workspace_id": ws.id, "workspace": ws.name})
+    accounts = [_seed_plan(db, plan) for plan in PLANS]
     log.info("Demo data seeded for %d accounts", len(accounts))
     return {"status": "seeded", "accounts": accounts,
             "note": "Passwords are shown once. Re-run with reset=true for new ones. Demo accounts are never scanned, emailed or counted as subscribers."}

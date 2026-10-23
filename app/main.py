@@ -7,11 +7,12 @@ API key that can see everything — that was gap #1 from the review, and this
 file is the fix.
 """
 from __future__ import annotations
+import json
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 import httpx
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,9 +27,10 @@ from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention,
-                     EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber,
+                     EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber, PromoCode, TrackingTag, UtmLink, SignupAttribution,
                      PushSubscription, Announcement, now_utc, aware)
-from .services import pipeline, media_room, auth, billing
+from .services import pipeline, media_room, auth, billing, promos, tracking
+from .services.ratelimit import RateLimiter
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
 from .collectors import news_collector, nairaland_collector, hackernews_collector, reddit_collector, youtube_collector, domain_collector, x_collector
@@ -189,7 +191,7 @@ def reset_password_route(body: ResetPasswordBody, db: Session = Depends(get_db))
 def _member_dict(m: OrgMember) -> dict:
     return {"id": m.id, "email": m.email, "name": m.name, "role": m.role, "role_label": ROLE_LABEL[m.role],
             "avatar_base64": m.avatar_base64, "phone": m.phone, "address": m.address,
-            "city": m.city, "country": m.country, "job_title": m.job_title}
+            "city": m.city, "country": m.country, "job_title": m.job_title, "demo_viewer": bool(m.demo_viewer)}
 
 
 # ==================================================================
@@ -612,6 +614,8 @@ def ai_draft(body: AiDraftBody, member: OrgMember = Depends(active_member), db: 
     else:
         summary = f"{case.severity} severity mention requiring a response."
     template_type = case.playbook_key or "general"
+    if org.is_demo:   # the public demo: a fixed sample, never a live AI call
+        return {"draft": media_room.sample_draft(ws.name if ws else org.name, summary)}
     return {"draft": media_room.draft_statement_ai(ws.name if ws else org.name, summary, template_type)}
 
 
@@ -813,6 +817,13 @@ class PendingCheckoutBody(BaseModel):
     quantity: int = 1
     pay_in_ngn: bool = False
     referral_code: str = ""
+    promo_code: str = ""        # a launch offer code such as PH15 (annual plans only)
+    utm_source: str = ""        # where the visitor came from: tags carried from the launch link
+    utm_medium: str = ""
+    utm_campaign: str = ""
+    utm_term: str = ""
+    utm_content: str = ""
+    session_id: str = ""        # the visitor's anonymous session id, to tie the funnel together
 
 
 @app.post("/api/billing/pending-checkout")
@@ -833,6 +844,15 @@ def start_pending_checkout(body: PendingCheckoutBody, db: Session = Depends(get_
     if body.quantity < 1 or body.quantity > max_quantity:
         raise HTTPException(422, f"For {body.cycle} billing, quantity must be between 1 and {max_quantity}.")
 
+    # A launch code is checked BEFORE anything is created. A code that cannot be used is refused with the reason, not
+    # silently ignored, so nobody pays full price believing they were discounted.
+    promo = None
+    if body.promo_code.strip():
+        try:
+            promo = promos.get_valid(db, body.promo_code, body.plan, body.cycle)
+        except promos.PromoError as e:
+            raise HTTPException(422, str(e))
+
     pending = PendingSignup(
         tx_ref="",  # set below, once we have the real one from Flutterwave's initiation call
         name=body.name, email=body.email.lower(), password_hash=auth.hash_password(body.password),
@@ -844,12 +864,24 @@ def start_pending_checkout(body: PendingCheckoutBody, db: Session = Depends(get_
     db.add(pending)
     db.flush()
     try:
-        url, tx_ref = billing.create_flutterwave_checkout_for_signup(db, pending.id, body.plan, body.cycle, body.quantity, body.email, body.pay_in_ngn)
+        url, tx_ref = billing.create_flutterwave_checkout_for_signup(db, pending.id, body.plan, body.cycle, body.quantity, body.email, body.pay_in_ngn,
+                                                                     promo_percent=promo.percent if promo else 0)
     except BillingNotConfigured as e:
         db.rollback()
         raise HTTPException(409, str(e))
     pending.tx_ref = tx_ref
-    db.commit()
+    db.commit()   # the payment link is real now: save it before anything else, so nothing below can ever lose it
+    # Where this customer came from and what they were charged, for the launch report. Saved in its OWN step, after
+    # the payment is safely recorded: if this fails, the customer still pays and still gets their account.
+    try:
+        price = billing.signup_pricing(db, body.plan, body.cycle, body.quantity, promo.percent if promo else 0, body.pay_in_ngn)
+        promos.record_started(db, pending.id, body.email, body.plan, body.cycle,
+                              {"source": body.utm_source, "medium": body.utm_medium, "campaign": body.utm_campaign, "term": body.utm_term, "content": body.utm_content},
+                              body.session_id, promo, price["discount"], price["amount"], price["currency"])
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        log.exception("Launch attribution could not be recorded for pending signup %s (checkout itself continues)", pending.id)
     return {"checkout_url": url}
 
 
@@ -871,8 +903,10 @@ def pending_checkout_status(tx_ref: str, db: Session = Depends(get_db)) -> dict:
     if not member:
         return {"ready": False}
     workspaces = db.scalars(select(Workspace).where(Workspace.organization_id == member.organization_id)).all()
+    attr = db.scalar(select(SignupAttribution).where(SignupAttribution.pending_signup_id == pending.id))
     return {
         "ready": True,
+        "purchase": ({"value": attr.charged_amount, "currency": attr.currency, "plan": attr.plan} if attr else None),
         "token": pending.completed_token,
         "member": {"id": member.id, "email": member.email, "name": member.name, "role": member.role,
                   "role_label": ROLE_LABEL.get(member.role, member.role),
@@ -1117,7 +1151,7 @@ def app_chat(ws_id: str, body: AppChatBody, ws: Workspace = Depends(owned_worksp
     and Professional+ get genuinely different depth of analysis, not just a
     cosmetic label difference."""
     from .services.auth import effective_plan, PLAN_APP_CHAT_MODE
-    from .services.chatbot import answer_app_chat
+    from .services.chatbot import answer_app_chat, demo_app_chat_reply
     from collections import Counter
     org = db.get(Organization, member.organization_id)
     mode = PLAN_APP_CHAT_MODE[effective_plan(org)]
@@ -1132,6 +1166,13 @@ def app_chat(ws_id: str, body: AppChatBody, ws: Workspace = Depends(owned_worksp
             f"Top platforms: {dict(platform.most_common(5))}\n"
             f"Recent HIGH severity titles: " +
             "; ".join(i.title[:120] for i in incidents if i.severity == "HIGH")[:1000])
+    if org.is_demo:   # the public demo: a fixed, honest answer built from the demo numbers, never a live AI call
+        negative = [i for i in incidents if i.sentiment == "Negative"]
+        return {"reply": demo_app_chat_reply(body.message, ws.name, dict(sev), dict(platform),
+                                             [i.title for i in incidents if i.severity == "HIGH"],
+                                             sentiment=dict(Counter(i.sentiment for i in incidents)),
+                                             negative_platforms=dict(Counter(i.platform for i in negative)),
+                                             negative_titles=[i.title for i in negative if i.severity in ("HIGH", "MEDIUM")]), "mode": mode}
     reply = answer_app_chat(body.message, body.history, ws.name, mode, stats)
     return {"reply": reply, "mode": mode}
 
@@ -2420,3 +2461,352 @@ def competitor_analytics(ws: Workspace = Depends(owned_workspace), db: Session =
         "sov": calculate_sov(db, ws.id, start_dt, end_dt),
         "ave": calculate_ave(own_incidents, ws),
     }
+
+
+# ==================================================================
+# LAUNCH: offer codes, the visit tracker, the public demo and the launch report
+# ==================================================================
+_track_limiter = RateLimiter(limit=240, window_seconds=600)
+_promo_limiter = RateLimiter(limit=60, window_seconds=600)
+_demo_limiter = RateLimiter(limit=40, window_seconds=3600)
+
+
+def _client_key(request: Request) -> str:
+    """Who is asking, used ONLY to count requests in memory (never stored)."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() or (request.client.host if request.client else "unknown")
+
+
+class TrackBody(BaseModel):
+    kind: str
+    session_id: str
+    utm_source: str = ""
+    utm_medium: str = ""
+    utm_campaign: str = ""
+    utm_term: str = ""
+    utm_content: str = ""
+    path: str = ""
+
+
+@app.post("/api/public/track", status_code=204)
+def public_track(body: TrackBody, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Counts one anonymous step of the launch funnel. Public by design. Anything that does not match the strict
+    rules is quietly ignored (same 204), so the endpoint reveals nothing and cannot be used to store junk."""
+    if not _track_limiter.allow(_client_key(request)):
+        raise HTTPException(429, "Too many requests.")
+    ev = promos.clean_event(body.kind, body.session_id, body.utm_source, body.utm_medium, body.utm_campaign, body.path, body.utm_term, body.utm_content)
+    if ev:
+        promos.record_event(db, ev)
+    return Response(status_code=204)
+
+
+@app.get("/api/public/promo/{code}")
+def public_promo_preview(code: str, request: Request, plan: str = "growth", cycle: str = "annual", quantity: int = 1,
+                         db: Session = Depends(get_db)) -> dict:
+    """What a launch code would take off, shown before the customer pays. Always answers 200: valid true or false with a reason."""
+    if not _promo_limiter.allow(_client_key(request)):
+        raise HTTPException(429, "Too many requests.")
+    if plan not in auth.SELF_SERVE_PLANS:
+        return {"valid": False, "message": "That offer is for the Standard, Growth and Professional plans."}
+    max_q = {"daily": 90, "monthly": 24, "annual": 5}.get(cycle, 1)
+    if quantity < 1 or quantity > max_q:
+        return {"valid": False, "message": "Choose between 1 and %d years." % max_q}
+    try:
+        base = billing.get_plan_catalog(db)[plan][billing.CYCLE_KEYS[cycle][0]]
+        return promos.quote(db, code, plan, cycle, quantity, base)
+    except promos.PromoError as e:
+        return {"valid": False, "message": str(e)}
+    except KeyError:
+        return {"valid": False, "message": "Choose annual, monthly or daily billing."}
+
+
+@app.post("/api/public/demo-session")
+def public_demo_session(request: Request, db: Session = Depends(get_db)) -> dict:
+    """The "See the live demo" button. Logs the visitor in to the read-only Professional demo workspace: no sign-up,
+    no password. The session lasts a few hours, and the server refuses anything that would change data (see deps.py)."""
+    if not _demo_limiter.allow(_client_key(request)):
+        raise HTTPException(429, "Too many demo sessions from this address. Please try again later.")
+    from .services import demo_seed
+    viewer = demo_seed.ensure_viewer(db)
+    if not viewer:
+        raise HTTPException(503, "The demo is being prepared. Please try again in a few minutes.")
+    token = auth.issue_session(db, viewer, ttl=timedelta(hours=6))
+    workspaces = db.scalars(select(Workspace).where(Workspace.organization_id == viewer.organization_id)).all()
+    return {"token": token, "member": _member_dict(viewer), "workspace_ids": [w.id for w in workspaces]}
+
+
+# ---- admin: launch codes and the launch report (BrandsLens team only)
+class PromoBody(BaseModel):
+    code: str
+    percent: int = 15
+    platform: str = ""
+    valid_from: str | None = None       # an ISO date or datetime; a bare date means that day in Lagos time
+    valid_until: str | None = None
+    max_redemptions: int | None = None
+    active: bool = True
+
+
+class PromoPatch(BaseModel):
+    percent: int | None = None
+    platform: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    max_redemptions: int | None = None
+    active: bool | None = None
+
+
+def _parse_when(text: str | None, end_of_day: bool = False):
+    if not text:
+        return None
+    try:
+        d = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(422, "Dates must look like 2026-11-24 or 2026-11-24T09:00:00+01:00.")
+    if d.tzinfo is None:   # a plain date or time is Lagos time (UTC+1, no daylight saving)
+        if len(text.strip()) <= 10 and end_of_day:
+            d = d + timedelta(days=1) - timedelta(seconds=1)
+        d = d.replace(tzinfo=timezone(timedelta(hours=1)))
+    return d.astimezone(timezone.utc)
+
+
+def _promo_dict(db: Session, p) -> dict:
+    return {"id": p.id, "code": p.code, "percent": p.percent, "platform": p.platform, "active": bool(p.active),
+            "valid_from": p.valid_from.isoformat() if p.valid_from else None,
+            "valid_until": p.valid_until.isoformat() if p.valid_until else None,
+            "max_redemptions": p.max_redemptions, "paid_redemptions": promos.redemptions(db, p)}
+
+
+@app.get("/api/admin/promos")
+def admin_list_promos(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    rows = db.scalars(select(PromoCode).order_by(PromoCode.created_at)).all()
+    return {"promos": [_promo_dict(db, p) for p in rows]}
+
+
+@app.post("/api/admin/promos")
+def admin_create_promo(body: PromoBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    code = promos.normalise(body.code, limit=None)    # never shorten silently: a code longer than 24 characters is refused
+    if not promos.CODE_RE.match(code):
+        raise HTTPException(422, "A code needs 3 to 24 letters or numbers.")
+    if not 1 <= body.percent <= 90:
+        raise HTTPException(422, "The discount must be between 1 and 90 percent.")
+    if db.scalar(select(PromoCode).where(PromoCode.code == code)):
+        raise HTTPException(409, "That code already exists. Edit it instead.")
+    p = PromoCode(code=code, percent=body.percent, platform=body.platform.strip()[:60], valid_from=_parse_when(body.valid_from),
+                  valid_until=_parse_when(body.valid_until, end_of_day=True), max_redemptions=body.max_redemptions, active=body.active)
+    db.add(p)
+    db.commit()
+    return _promo_dict(db, p)
+
+
+@app.patch("/api/admin/promos/{promo_id}")
+def admin_update_promo(promo_id: str, body: PromoPatch, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    p = db.get(PromoCode, promo_id)
+    if not p:
+        raise HTTPException(404, "Code not found.")
+    data = body.model_dump(exclude_unset=True)
+    if "percent" in data:
+        if data["percent"] is None or not 1 <= data["percent"] <= 90:
+            raise HTTPException(422, "The discount must be between 1 and 90 percent.")
+        p.percent = data["percent"]
+    if "platform" in data and data["platform"] is not None:
+        p.platform = data["platform"].strip()[:60]
+    if "valid_from" in data:
+        p.valid_from = _parse_when(data["valid_from"])
+    if "valid_until" in data:
+        p.valid_until = _parse_when(data["valid_until"], end_of_day=True)
+    if "max_redemptions" in data:
+        p.max_redemptions = data["max_redemptions"]
+    if "active" in data and data["active"] is not None:
+        p.active = data["active"]
+    db.commit()
+    return _promo_dict(db, p)
+
+
+@app.get("/api/admin/launch/summary")
+def admin_launch_summary(days: int = 60, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """The launch report: per platform, visitors to paid signups and revenue; per code, uses and discount given."""
+    _require_exempt(member, db)
+    since = now_utc() - timedelta(days=max(1, min(days, 365)))
+    return promos.launch_summary(db, since)
+
+
+# ---- one-off setup routes (same secret as the others; remove or ignore once used)
+@app.get("/api/setup/seed-launch-codes")
+def setup_seed_launch_codes(secret: str, percent: int = 15, starts_on: str = "2026-11-24", days: int = 31,
+                            db: Session = Depends(get_db)) -> dict:
+    """Creates the launch codes (PH15, HN15, PEERLIST15, IH15) if they do not exist. Safe to run twice: it never changes a
+    code you have already edited. Runs from midnight Lagos time on starts_on, for `days` days."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    if not 1 <= percent <= 90:
+        raise HTTPException(422, "percent must be between 1 and 90.")
+    try:
+        return promos.seed_launch_codes(db, percent=percent, starts_on=starts_on, days=days)
+    except ValueError:
+        raise HTTPException(422, "starts_on must look like 2026-11-24.")
+
+
+@app.get("/api/setup/reclassify")
+def setup_reclassify(secret: str, dry_run: bool = True, limit: int = 200, db: Session = Depends(get_db)) -> dict:
+    """Re-scores the mentions that were saved as WATCH while the AI had no credit. A DRY RUN by default: it reports what it
+    would change and changes nothing until you pass dry_run=false. Stops at the first sign the AI is still unavailable."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    from .services import reclassify
+    return reclassify.run(db, dry_run=dry_run, limit=max(1, min(limit, 1000)))
+
+
+# ==================================================================
+# TRACKING TAGS (Meta Pixel, Google tag, LinkedIn, X, TikTok and more) and the UTM link builder
+# ==================================================================
+_config_limiter = RateLimiter(limit=300, window_seconds=600)
+
+
+@app.get("/api/public/tracking-config")
+def public_tracking_config(request: Request, response: Response, scope: str = "marketing", db: Session = Depends(get_db)) -> dict:
+    """Which tags a website should load. Public, and cached for a minute. Holds only enabled tags: category and ID, nothing else."""
+    if not _config_limiter.allow(_client_key(request)):
+        raise HTTPException(429, "Too many requests.")
+    if scope not in ("marketing", "app"):
+        raise HTTPException(422, "scope must be marketing or app.")
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=60"
+    return tracking.public_config(db, scope)
+
+
+class TagBody(BaseModel):
+    provider: str
+    tag_id: str
+    label: str = ""
+    scope: str = "marketing"
+    enabled: bool = True
+    events: dict | None = None
+
+
+class TagPatch(BaseModel):
+    tag_id: str | None = None
+    label: str | None = None
+    scope: str | None = None
+    enabled: bool | None = None
+    events: dict | None = None
+
+
+def _providers_for_ui() -> list[dict]:
+    return [{"provider": k, "name": v["name"], "example": v["example"], "where": v["where"], "event_keys": sorted(v["events"].keys())} for k, v in tracking.PROVIDERS.items()]
+
+
+@app.get("/api/admin/tracking/tags")
+def admin_list_tags(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    rows = db.scalars(select(TrackingTag).order_by(TrackingTag.created_at)).all()
+    return {"tags": [tracking.tag_dict(t) for t in rows], "providers": _providers_for_ui()}
+
+
+@app.post("/api/admin/tracking/tags")
+def admin_create_tag(body: TagBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    if body.scope not in tracking.SCOPES:
+        raise HTTPException(422, "Choose where the tag runs: the marketing site, the app sign-up pages, or both.")
+    try:
+        clean, _cat, events = tracking.validate(body.provider, body.tag_id, body.events)
+    except tracking.TrackingError as e:
+        raise HTTPException(422, str(e))
+    if db.scalar(select(TrackingTag).where(TrackingTag.provider == body.provider, TrackingTag.tag_id == clean)):
+        raise HTTPException(409, "That tag is already added. Edit it instead.")
+    t = TrackingTag(provider=body.provider, tag_id=clean, label=body.label.strip()[:80], scope=body.scope, enabled=body.enabled,
+                    events=json.dumps(events) if events else "", updated_by=member.email)
+    db.add(t)
+    db.commit()
+    log.info("Tracking tag added: %s %s (%s) by %s", t.provider, t.tag_id, t.scope, member.email)
+    return tracking.tag_dict(t)
+
+
+@app.patch("/api/admin/tracking/tags/{tag_pk}")
+def admin_update_tag(tag_pk: str, body: TagPatch, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    t = db.get(TrackingTag, tag_pk)
+    if not t:
+        raise HTTPException(404, "Tag not found.")
+    data = body.model_dump(exclude_unset=True)
+    if "scope" in data:
+        if data["scope"] not in tracking.SCOPES:
+            raise HTTPException(422, "Choose where the tag runs: the marketing site, the app sign-up pages, or both.")
+        t.scope = data["scope"]
+    if "tag_id" in data or "events" in data:
+        try:
+            events_in = data["events"] if "events" in data else (json.loads(t.events) if t.events else {})
+            clean, _cat, events = tracking.validate(t.provider, data.get("tag_id", t.tag_id), events_in)
+        except tracking.TrackingError as e:
+            raise HTTPException(422, str(e))
+        t.tag_id, t.events = clean, (json.dumps(events) if events else "")
+    if "label" in data and data["label"] is not None:
+        t.label = data["label"].strip()[:80]
+    if "enabled" in data and data["enabled"] is not None:
+        t.enabled = data["enabled"]
+    t.updated_at, t.updated_by = now_utc(), member.email
+    db.commit()
+    log.info("Tracking tag changed: %s %s enabled=%s by %s", t.provider, t.tag_id, t.enabled, member.email)
+    return tracking.tag_dict(t)
+
+
+@app.delete("/api/admin/tracking/tags/{tag_pk}")
+def admin_delete_tag(tag_pk: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    t = db.get(TrackingTag, tag_pk)
+    if not t:
+        raise HTTPException(404, "Tag not found.")
+    db.delete(t)
+    db.commit()
+    log.info("Tracking tag removed: %s %s by %s", t.provider, t.tag_id, member.email)
+    return {"deleted": True}
+
+
+class UtmBody(BaseModel):
+    label: str = ""
+    destination: str
+    utm_source: str
+    utm_medium: str = ""
+    utm_campaign: str = ""
+    utm_term: str = ""
+    utm_content: str = ""
+
+
+def _utm_dict(u: UtmLink) -> dict:
+    return {"id": u.id, "label": u.label, "destination": u.destination, "utm_source": u.utm_source, "utm_medium": u.utm_medium, "utm_campaign": u.utm_campaign,
+            "utm_term": u.utm_term, "utm_content": u.utm_content, "created_by": u.created_by, "created_at": u.created_at.isoformat() if u.created_at else None,
+            "url": tracking.build_utm_url(u.destination, u.utm_source, u.utm_medium, u.utm_campaign, u.utm_term, u.utm_content, MARKETING_URL)}
+
+
+@app.get("/api/admin/utm-links")
+def admin_list_utm_links(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    return {"links": [_utm_dict(u) for u in db.scalars(select(UtmLink).order_by(UtmLink.created_at.desc())).all()]}
+
+
+@app.post("/api/admin/utm-links")
+def admin_create_utm_link(body: UtmBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    if not promos.clean_tag(body.utm_source):
+        raise HTTPException(422, "A campaign link needs a source, for example producthunt or linkedin.")
+    try:
+        dest = tracking.clean_destination(body.destination)
+    except tracking.TrackingError as e:
+        raise HTTPException(422, str(e))
+    u = UtmLink(label=body.label.strip()[:120], destination=dest, utm_source=promos.clean_tag(body.utm_source), utm_medium=promos.clean_tag(body.utm_medium),
+                utm_campaign=promos.clean_tag(body.utm_campaign, 80), utm_term=promos.clean_tag(body.utm_term, 80), utm_content=promos.clean_tag(body.utm_content, 80), created_by=member.email)
+    db.add(u)
+    db.commit()
+    return _utm_dict(u)
+
+
+@app.delete("/api/admin/utm-links/{link_id}")
+def admin_delete_utm_link(link_id: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    u = db.get(UtmLink, link_id)
+    if not u:
+        raise HTTPException(404, "Link not found.")
+    db.delete(u)
+    db.commit()
+    return {"deleted": True}

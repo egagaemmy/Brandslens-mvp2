@@ -81,6 +81,22 @@ def sweep_sla() -> None:
         db.close()
 
 
+def refresh_demo() -> None:
+    """Keeps the public demo fresh: rebuilds the Professional demo every few hours so its response clocks show a realistic
+    time remaining. Does nothing unless a Professional demo workspace exists, and can be switched off with DEMO_AUTO_RESET=off."""
+    import os
+    if os.environ.get("DEMO_AUTO_RESET", "on").strip().lower() in ("0", "false", "off", "no"):
+        return
+    db = SessionLocal()
+    try:
+        from .services import demo_seed
+        demo_seed.refresh_public_demo(db)
+    except Exception:  # noqa: BLE001 — a failed refresh must never stop the scheduler
+        log.exception("Public demo refresh failed")
+    finally:
+        db.close()
+
+
 def verify_stale_subscriptions() -> None:
     db = SessionLocal()
     try:
@@ -127,6 +143,8 @@ def main() -> None:
     sched.add_job(sweep_sla, "interval", minutes=CADENCE_SLA_SWEEP, id="sla-sweep")
     sched.add_job(verify_stale_subscriptions, "interval", minutes=CADENCE_SUBSCRIPTION_VERIFY, id="subscription-verify")
     sched.add_job(check_subscription_expiry, "interval", minutes=CADENCE_EXPIRY_CHECK, id="expiry-check")
+    import os as _os
+    sched.add_job(refresh_demo, "interval", hours=max(1, int(_os.environ.get("DEMO_RESET_HOURS", "3") or 3)), id="demo-refresh")
     sched.start()
     start_background_loops()
     log.info("MVP worker started — news %sm, nairaland %sm, hackernews %sm, reddit %sm, youtube %sm, domains %sm, SLA sweep %sm, subscription verify %sm, expiry check %sm",

@@ -178,8 +178,25 @@ def _flutterwave_initiate_payment(tx_ref: str, amount: float, redirect_url: str,
 MAX_QUANTITY = {"daily": 90, "monthly": 24, "annual": 5}
 
 
+def signup_pricing(db: Session, plan: str, cycle: str, quantity: int, promo_percent: int = 0, pay_in_ngn: bool = False) -> dict:
+    """Exactly what a pay-first signup is charged, and how much of that is launch discount.
+
+    With promo_percent > 0 the discount is that percentage of ONE year's price, taken off the total (see services/promos.py).
+    Without a promo this reproduces the original amounts exactly, to the cent. Used by the checkout AND by the launch
+    report, so what a customer is asked to pay and what is recorded can never drift apart."""
+    from . import promos
+    base = get_plan_catalog(db)[plan][CYCLE_KEYS[cycle][0]]
+    discount = promos.price_with_promo(base, quantity, promo_percent)[0] if promo_percent else 0.0
+    if pay_in_ngn:
+        rate = get_ngn_rate(db)
+        return {"currency": "NGN", "amount": round((base * quantity - discount) * rate, 2), "discount": round(discount * rate, 2),
+                "usd_total": round(base * quantity - discount, 2), "base_price": base}
+    return {"currency": "USD", "amount": round(base * quantity - discount, 2), "discount": discount,
+            "usd_total": round(base * quantity - discount, 2), "base_price": base}
+
+
 def create_flutterwave_checkout_for_signup(db: Session, pending_id: str, plan: str, cycle: str, quantity: int, customer_email: str,
-                                           pay_in_ngn: bool = False) -> tuple[str, str]:
+                                           pay_in_ngn: bool = False, promo_percent: int = 0) -> tuple[str, str]:
     """The pay-first equivalent of create_flutterwave_checkout — for a
     prospect who doesn't have an account yet. No Organization exists at
     this point; pending_id (a PendingSignup row's id) is what the webhook
@@ -205,20 +222,25 @@ def create_flutterwave_checkout_for_signup(db: Session, pending_id: str, plan: s
     catalog = get_plan_catalog(db)[plan]
     price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
     base_price = catalog[price_key]
+    price = signup_pricing(db, plan, cycle, quantity, promo_percent, pay_in_ngn)
+    promo_meta = {"promo_percent": promo_percent} if promo_percent else {}
     tx_ref = f"blens-signup-{pending_id}-{int(now_utc().timestamp())}"
     if pay_in_ngn:
         url = _flutterwave_initiate_payment(
-            tx_ref=tx_ref, amount=round(base_price * quantity * get_ngn_rate(db), 2),
+            tx_ref=tx_ref, amount=price["amount"],
             redirect_url=f"{APP_URL}/signup/complete?tx_ref={tx_ref}", customer_email=customer_email,
-            meta={"pending_signup_id": pending_id, "plan": plan, "cycle": cycle, "quantity": quantity, "one_time": True},
+            meta={"pending_signup_id": pending_id, "plan": plan, "cycle": cycle, "quantity": quantity, "one_time": True, **promo_meta},
             payment_plan=None, currency="NGN", payment_options="card, banktransfer, ussd, account",
         )
         return url, tx_ref
+    # A recurring Flutterwave plan has a fixed amount that cannot be lowered for one customer, so a discounted first year is
+    # charged as a one-time prepaid year instead (renewal at full price then goes through the normal renewal flow).
+    recurring = quantity == 1 and not promo_percent
     url = _flutterwave_initiate_payment(
-        tx_ref=tx_ref, amount=round(base_price * quantity, 2),
+        tx_ref=tx_ref, amount=price["amount"],
         redirect_url=f"{APP_URL}/signup/complete?tx_ref={tx_ref}", customer_email=customer_email,
-        meta={"pending_signup_id": pending_id, "plan": plan, "cycle": cycle, "quantity": quantity},
-        payment_plan=catalog[flutterwave_key] if quantity == 1 else None,
+        meta={"pending_signup_id": pending_id, "plan": plan, "cycle": cycle, "quantity": quantity, **promo_meta},
+        payment_plan=catalog[flutterwave_key] if recurring else None,
     )
     return url, tx_ref
 
@@ -347,6 +369,11 @@ def recover_pending_signup_by_tx_ref(db: Session, tx_ref: str) -> dict:
             data.get("amount", 0), data.get("currency", "USD"), str(data.get("id", tx_ref)))
     except Exception:  # noqa: BLE001
         log.exception("Referral commission failed during recovery of %s (account itself was recovered fine)", tx_ref)
+    try:
+        from . import promos
+        promos.mark_paid(db, pending.id, member.organization_id, data.get("amount"), data.get("currency"))
+    except Exception:  # noqa: BLE001
+        log.exception("Launch attribution could not be marked paid during recovery of %s", tx_ref)
     log.info("Recovered pending signup %s via manual admin recovery: organization_id=%s", tx_ref, member.organization_id)
     return {"ok": True, "member_email": member.email, "organization_id": member.organization_id}
 
@@ -603,6 +630,11 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
                                 data.get("amount", 0), data.get("currency", "USD"), str(data.get("id", "")))
                         except Exception:  # noqa: BLE001
                             log.exception("Referral commission failed for pending signup %s (account itself was created fine)", pending_signup_id)
+                        try:
+                            from . import promos
+                            promos.mark_paid(db, pending_signup_id, org_id, data.get("amount"), data.get("currency"))
+                        except Exception:  # noqa: BLE001 — the launch report must never disturb a real, paid account
+                            log.exception("Launch attribution could not be marked paid for %s (account itself was created fine)", pending_signup_id)
                     except Exception:  # noqa: BLE001 — a failure here must never silently swallow a real payment
                         log.exception("Failed to create account from pending signup %s after confirmed payment", pending_signup_id)
                 else:
