@@ -47,7 +47,7 @@ def run(db: Session, dry_run: bool = True, limit: int = 200, batch_size: int = 1
             results = classifier.classify_batch(ws.name, f"Sector: {ws.sector}.", items)
             by_idx = {int(r["idx"]): r for r in results if str(r.get("idx", "")).lstrip("-").isdigit()}
             if all((by_idx.get(i) or {}).get("rationale") == FALLBACK_MARK for i in range(len(chunk))):
-                stopped = "The AI did not answer (no credit or a key problem). Nothing further was attempted. Run /api/setup/ai-check."
+                stopped = "The AI did not give a usable answer for the first batch (the call failed or its reply could not be read). Nothing further was attempted. Check the service logs for the reason, then run /api/setup/ai-check."
                 break
             for i, inc in enumerate(chunk):
                 r = by_idx.get(i)

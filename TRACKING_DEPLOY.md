@@ -34,4 +34,10 @@ Until it has run, the launch tracker and the launch report will fail.
 Tags with the scope "app" or "both" (the app's sign-up pages) and the per-platform conversion IDs are stored and validated, but the app does not load them.
 The Super Admin screen only creates marketing-site tags for that reason.
 
-Tests: `python -m pytest tests` (149; about two and a half minutes). Tag and link tests: `tests/test_tracking_tags.py` (44). Campaign tests: `tests/test_utm_campaigns.py` (6).
+Tests: `python -m pytest tests` (163; about two and a half minutes). Tag and link tests: `tests/test_tracking_tags.py` (44). Campaign tests: `tests/test_utm_campaigns.py` (6).
+
+## Classifier fix (found on the live server)
+The scoring of mentions threw away a whole batch whenever the AI's reply could not be read, and the re-scoring tool then blamed credit. The live log showed a reply
+cut off mid-sentence. The classifier now (1) allows a reply size that grows with the batch, (2) keeps every complete item from a cut-off or wrapped reply,
+(3) asks again only for the missing items, at most seven calls per batch, (4) never retries an account problem, and (5) asks the AI for compact, short answers.
+Tests: `tests/test_classifier_robustness.py`.
