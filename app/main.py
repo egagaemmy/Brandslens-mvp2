@@ -40,7 +40,9 @@ from .routes_referrals import router as referrals_router  # noqa: E402
 from .services import referrals as referrals_svc  # noqa: E402
 app.include_router(referrals_router)
 from .routes_guides import router as guides_router  # noqa: E402
+from .routes_trial import router as trial_router  # noqa: E402
 app.include_router(guides_router)
+app.include_router(trial_router)
 log = logging.getLogger("main")
 # CORS deliberately does NOT rely solely on FRONTEND_ORIGIN — that variable
 # is also used elsewhere for a different purpose (the "back to homepage"
@@ -353,9 +355,11 @@ def update_workspace(body: WorkspaceUpdateBody, ws: Workspace = Depends(owned_wo
     org = db.get(Organization, member.organization_id)
     updates = body.model_dump(exclude_unset=True)
     if "keywords" in updates and updates["keywords"] is not None:
-        limit = PLAN_KEYWORD_LIMIT[effective_plan(org)]
+        from .services.trial import limit as trial_limit, is_trial
+        limit = trial_limit(db, org, "keywords", PLAN_KEYWORD_LIMIT[effective_plan(org)])
         if len(updates["keywords"]) > limit:
-            raise HTTPException(422, f"Your plan allows up to {limit} tracked keywords")
+            raise HTTPException(422, (f"Your free trial allows up to {limit} tracked keywords. Upgrade to add more." if is_trial(org)
+                                      else f"Your plan allows up to {limit} tracked keywords"))
     if "ave_currency" in updates and updates["ave_currency"] is not None:
         code = updates["ave_currency"].strip().upper()
         if len(code) != 3 or not code.isalpha():
@@ -519,7 +523,13 @@ def trigger_historical_scan(body: HistoricalScanBody, tasks: BackgroundTasks,
     from .services.auth import effective_plan, PLAN_HISTORICAL_DAYS
     org = db.get(Organization, member.organization_id)
     plan = effective_plan(org)
-    max_days = PLAN_HISTORICAL_DAYS[plan]
+    from .services.trial import limit as trial_limit, is_trial
+    max_days = trial_limit(db, org, "historical_days", PLAN_HISTORICAL_DAYS[plan])
+    if is_trial(org):
+        if max_days <= 0:
+            raise HTTPException(403, "Historical search isn't included in the free trial. Choose a plan to use it.")
+        if body.days_back > max_days:
+            raise HTTPException(422, f"Your free trial allows historical search up to {max_days} days back. Upgrade for a wider range.")
     if max_days <= 0:
         raise HTTPException(403, "Historical search isn't available on the Standard plan — upgrade to Growth or higher to use it.")
     if body.days_back <= 0:
@@ -616,6 +626,8 @@ def ai_draft(body: AiDraftBody, member: OrgMember = Depends(active_member), db: 
     template_type = case.playbook_key or "general"
     if org.is_demo:   # the public demo: a fixed sample, never a live AI call
         return {"draft": media_room.sample_draft(ws.name if ws else org.name, summary)}
+    from .services.trial import consume
+    consume(db, org, "ai_drafts")
     return {"draft": media_room.draft_statement_ai(ws.name if ws else org.name, summary, template_type)}
 
 
@@ -1157,6 +1169,9 @@ def app_chat(ws_id: str, body: AppChatBody, ws: Workspace = Depends(owned_worksp
     mode = PLAN_APP_CHAT_MODE[effective_plan(org)]
     if not mode:
         raise HTTPException(403, "Ask BrandsLens requires the Growth plan or higher.")
+    if not org.is_demo:
+        from .services.trial import consume
+        consume(db, org, "ask_messages")
 
     incidents = db.scalars(select(Incident).where(Incident.workspace_id == ws.id)
                           .order_by(Incident.posted_at.desc()).limit(300)).all()
@@ -2385,10 +2400,11 @@ def add_competitor(body: CompetitorBody, ws: Workspace = Depends(owned_workspace
     if not name:
         raise HTTPException(422, "Competitor name can't be empty.")
     org = db.get(Organization, member.organization_id)
-    limit = PLAN_COMPETITOR_LIMIT[effective_plan(org)]
+    from .services.trial import limit as trial_limit, is_trial
+    limit = trial_limit(db, org, "competitors", PLAN_COMPETITOR_LIMIT[effective_plan(org)])
     existing_count = db.scalar(select(func.count(Competitor.id)).where(Competitor.workspace_id == ws.id))
     if existing_count >= limit:
-        raise HTTPException(422, f"Your plan allows tracking up to {limit} competitors. Upgrade to add more.")
+        raise HTTPException(422, f"Your {'free trial' if is_trial(org) else 'plan'} allows tracking up to {limit} competitors. Upgrade to add more.")
     if db.scalar(select(Competitor).where(Competitor.workspace_id == ws.id, Competitor.name == name)):
         raise HTTPException(422, f'"{name}" is already being tracked.')
     comp = Competitor(workspace_id=ws.id, name=name)

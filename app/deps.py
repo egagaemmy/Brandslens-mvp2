@@ -78,6 +78,13 @@ def active_member(member: OrgMember = Depends(current_member), db: Session = Dep
     org = db.get(Organization, member.organization_id)
     if org.billing_status == "exempt":
         return member
+    if org.billing_status == "trialing":
+        from .services import trial
+        try:
+            trial.check_active(db, org)
+        except trial.TrialExpired:
+            raise HTTPException(402, "Your free trial has ended. Choose a plan to keep your workspace.", headers={"X-Trial-Expired": "1"})
+        return member
     if org.billing_status != "active":
         raise HTTPException(402, "Payment required to activate your BrandsLens account.")
     if org.paid_until and aware(org.paid_until) < now_utc():

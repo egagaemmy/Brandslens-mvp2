@@ -62,6 +62,11 @@ class Organization(Base):
     expiry_warning_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)  # reset to null on every fresh charge, so each new period gets its own warning
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)  # a fictional demo account used to record tutorial videos: never scanned, never emailed, never counted as a subscriber
     expiry_notice_sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)  # same idea, for the "has expired" notice
+    # Free trial: a business-email lead gets a time-limited, capped, Professional-feel workspace. billing_status is 'trialing' until trial_ends_at.
+    trial_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    trial_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    trial_ai_drafts: Mapped[int] = mapped_column(Integer, nullable=True, default=0)          # AI statement drafts used during the trial (capped)
+    trial_ask_messages: Mapped[int] = mapped_column(Integer, nullable=True, default=0)       # "Ask BrandsLens" questions used during the trial (capped)
     # Only meaningful for a one-time, multi-period purchase (quantity > 1 at
     # checkout) — a customer who pays for 3 months up front isn't on a
     # recurring Flutterwave plan, so there's no subscription telling us when
@@ -687,3 +692,52 @@ class UtmLink(Base):
     utm_content: Mapped[str] = mapped_column(String(80), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     created_by: Mapped[str] = mapped_column(String(320), default="")
+
+
+def new_token() -> str:
+    import secrets
+    return secrets.token_urlsafe(24)
+
+
+class TrialSignup(Base):
+    """One person who asked for a free trial: the lead record. It exists from the first request (before the email is verified) and carries on
+    after the trial ends, so it is the list the team nurtures and exports. Once verified it points at the trial organization."""
+    __tablename__ = "trial_signups"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    domain: Mapped[str] = mapped_column(String(200), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    company: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(20), default="pending")   # pending | requested | approved | active | expired | converted | blocked
+    note: Mapped[str] = mapped_column(String(500), default="")           # why someone without a business email asked for access
+    code_hash: Mapped[str] = mapped_column(String(64), default="")
+    code_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    code_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    organization_id: Mapped[str] = mapped_column(String(36), nullable=True, index=True)
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    unsub_token: Mapped[str] = mapped_column(String(48), default=new_token, index=True)
+    unsubscribed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    utm_source: Mapped[str] = mapped_column(String(80), default="")
+    utm_medium: Mapped[str] = mapped_column(String(80), default="")
+    utm_campaign: Mapped[str] = mapped_column(String(80), default="")
+    utm_term: Mapped[str] = mapped_column(String(80), default="")
+    utm_content: Mapped[str] = mapped_column(String(80), default="")
+    session_id: Mapped[str] = mapped_column(String(64), default="")
+    ip_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)   # fixed when the trial starts, so a later change to the default length never alters it
+
+
+class TrialEmail(Base):
+    """Which lifecycle email has gone to which lead, so none is ever sent twice."""
+    __tablename__ = "trial_emails"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    signup_id: Mapped[str] = mapped_column(String(36), index=True)
+    step_key: Mapped[str] = mapped_column(String(40))
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    skipped: Mapped[bool] = mapped_column(Boolean, default=False)       # recorded but not sent (not consented, or an earlier step overtaken by a later one)

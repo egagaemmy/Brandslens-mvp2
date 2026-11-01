@@ -36,7 +36,7 @@ Pricing (annual; monthly costs 15% more; daily costs 20% more than the annual da
 - Enterprise: custom quote, priced to the scope of the work — direct people to the "Get a quote" \
 form on the pricing section for this tier; never invent a number for it.
 
-There is NO free trial. Payment is required to activate an account.
+A free trial for business email addresses is sometimes on offer, and its length and limits change. Never state a length or a limit yourself: tell people to look at www.brandslens.com/pricing, where the current offer is shown, and that personal email addresses such as Gmail cannot start a trial. Without a trial, payment is required to activate an account.
 
 Sources currently monitored, with zero setup required: global news (via GDELT) and any RSS feed \
 the customer adds, Nairaland (a major Nigerian web forum), Hacker News, and look-alike/typosquat \

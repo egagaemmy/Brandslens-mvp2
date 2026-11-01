@@ -678,6 +678,8 @@ def _activate_plan(db: Session, org_id: str, plan: str, provider: str, customer_
     org.workspace_limit = PLAN_WORKSPACE_LIMIT.get(plan, org.workspace_limit)
     org.keyword_limit = PLAN_KEYWORD_LIMIT.get(plan, org.keyword_limit)
     db.commit()
+    from .trial import mark_converted
+    mark_converted(db, org)
     if is_first_activation:
         # Only a genuine first activation — never a renewal or a plan
         # change for a customer who's already active, which would

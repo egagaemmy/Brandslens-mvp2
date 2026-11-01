@@ -250,10 +250,11 @@ def invite_member(db: Session, inviter: OrgMember, email: str, name: str, role: 
         raise AuthError("That email is already on a BrandsLens account.")
 
     org = db.get(Organization, inviter.organization_id)
-    limit = PLAN_MEMBER_LIMIT[effective_plan(org)]
+    from .trial import limit as _trial_limit
+    limit = _trial_limit(db, org, "members", PLAN_MEMBER_LIMIT[effective_plan(org)])
     existing_count = db.scalar(select(func.count(OrgMember.id)).where(OrgMember.organization_id == org.id))
     if existing_count >= limit:
-        raise AuthError(f"Your plan allows up to {limit} team members. Upgrade to add more.")
+        raise AuthError(f"Your {'free trial' if org.billing_status == 'trialing' else 'plan'} allows up to {limit} team members. Upgrade to add more.")
 
     member = OrgMember(organization_id=inviter.organization_id, email=email.lower(), name=name,
                        role=role, status="invited", invited_by=inviter.id)
@@ -336,10 +337,11 @@ def add_workspace(db: Session, actor: OrgMember, name: str, sector: str) -> Work
     if actor.role == "member":
         raise AuthError("Only the account Owner or a Team Lead can add a workspace.")
     org = db.get(Organization, actor.organization_id)
-    limit = PLAN_WORKSPACE_LIMIT[effective_plan(org)]
+    from .trial import limit as _trial_limit
+    limit = _trial_limit(db, org, "workspaces", PLAN_WORKSPACE_LIMIT[effective_plan(org)])
     existing = db.scalars(select(Workspace).where(Workspace.organization_id == org.id)).all()
     if len(existing) >= limit:
-        raise AuthError(f"Your plan allows up to {limit} workspace(s). Upgrade to add more.")
+        raise AuthError(f"Your {'free trial' if org.billing_status == 'trialing' else 'plan'} allows up to {limit} workspace(s). Upgrade to add more.")
     ws = Workspace(organization_id=org.id, name=name, sector=sector, owner_email=actor.email,
                   brand_tokens=[t.strip().lower() for t in name.split() if len(t.strip()) > 2] or [name.lower()],
                   rss_feeds=list(DEFAULT_RSS_FEEDS))

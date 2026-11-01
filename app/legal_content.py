@@ -55,8 +55,14 @@ instance of fraud.**
   refund the current period unless required by applicable consumer law.
 - On cancellation, your organization's data is retained in a read-only state
   for 30 days before deletion, so an accidental cancellation can be reversed.
-- Free trials, where offered, convert to a paid subscription unless
-  cancelled before the trial ends — the exact terms will be shown at signup.
+- A free trial, where offered, ends automatically on the date shown in
+  your account. It needs no payment card and never turns into a paid plan
+  on its own: to continue, you choose a plan and pay. If you do not,
+  access stops when the trial ends, and we may delete workspaces that
+  were never upgraded after a reasonable period.
+- If you agree to marketing emails when you start a trial, you can
+  unsubscribe at any time using the link in any email. We will still send
+  you messages about the trial itself.
 
 ## 5. Acceptable use
 

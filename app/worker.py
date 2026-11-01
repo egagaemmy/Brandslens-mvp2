@@ -28,10 +28,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 log = logging.getLogger("worker")
 
 
+def _expired_trial(Org):
+    """An unpaid organization whose free trial has ended: locked out, so scanning it would only spend money."""
+    from sqlalchemy import and_
+    from .models import now_utc
+    return and_(Org.trial_ends_at.isnot(None), Org.billing_status.in_(["trialing", "unpaid"]), Org.trial_ends_at < now_utc())
+
+
 def _each_workspace(db):
     from .models import Organization
     return db.scalars(select(Workspace).join(Organization, Organization.id == Workspace.organization_id)
-                      .where(Workspace.active == True, Organization.is_demo.isnot(True))).all()   # NULL counts as not demo: a real customer must never be skipped
+                      .where(Workspace.active == True, Organization.is_demo.isnot(True),
+                            ~_expired_trial(Organization))).all()   # NULL counts as not demo: a real customer must never be skipped
 
 
 def run_collector(name: str, collect_fn) -> None:
@@ -108,6 +116,18 @@ def verify_stale_subscriptions() -> None:
         db.close()
 
 
+def trial_lifecycle() -> None:
+    """Ends trials at their exact time (the gate already does this on every request) and sends the due lifecycle emails."""
+    from .services import trial
+    db = SessionLocal()
+    try:
+        trial.run_lifecycle(db)
+    except Exception:  # noqa: BLE001 - must never stop the scheduler
+        log.exception("Trial lifecycle run failed")
+    finally:
+        db.close()
+
+
 def check_subscription_expiry() -> None:
     db = SessionLocal()
     try:
@@ -143,6 +163,7 @@ def main() -> None:
     sched.add_job(sweep_sla, "interval", minutes=CADENCE_SLA_SWEEP, id="sla-sweep")
     sched.add_job(verify_stale_subscriptions, "interval", minutes=CADENCE_SUBSCRIPTION_VERIFY, id="subscription-verify")
     sched.add_job(check_subscription_expiry, "interval", minutes=CADENCE_EXPIRY_CHECK, id="expiry-check")
+    sched.add_job(trial_lifecycle, "interval", minutes=15, id="trial-lifecycle")
     import os as _os
     sched.add_job(refresh_demo, "interval", hours=max(1, int(_os.environ.get("DEMO_RESET_HOURS", "3") or 3)), id="demo-refresh")
     sched.start()

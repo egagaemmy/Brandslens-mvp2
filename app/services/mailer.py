@@ -37,6 +37,24 @@ def add_to_mailchimp(email: str, name: str = "") -> bool:
         return False
 
 
+def unsubscribe_from_mailchimp(email: str) -> bool:
+    """The other half of consent: when someone opts out through BrandsLens' own link, they must stop receiving Mailchimp campaigns too.
+    Someone who was never on the list is fine (nothing to do)."""
+    if not (MAILCHIMP_API_KEY and MAILCHIMP_SERVER_PREFIX and MAILCHIMP_LIST_ID):
+        return False
+    subscriber_hash = hashlib.md5(email.lower().encode()).hexdigest()
+    url = f"https://{MAILCHIMP_SERVER_PREFIX}.api.mailchimp.com/3.0/lists/{MAILCHIMP_LIST_ID}/members/{subscriber_hash}"
+    try:
+        r = httpx.patch(url, auth=("anystring", MAILCHIMP_API_KEY), json={"status": "unsubscribed"}, timeout=10)
+        if r.status_code == 404:
+            return False
+        r.raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception("Mailchimp unsubscribe failed for %s", email)
+        return False
+
+
 def slack_alert(text: str, webhook: str = "") -> bool:
     hook = webhook or SLACK_WEBHOOK_DEFAULT
     if not hook:
@@ -73,14 +91,14 @@ def send_push_notification(endpoint: str, p256dh_key: str, auth_key: str, title:
         return False
 
 
-def send_email(to: str, subject: str, html_body: str) -> bool:
+def send_email(to: str, subject: str, html_body: str, from_addr: str = "", reply_to: str = "") -> bool:
     if not RESEND_API_KEY:
         log.info("No RESEND_API_KEY configured — email suppressed: %r to %s", subject, to)
         return False
     try:
         httpx.post("https://api.resend.com/emails",
                   headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                  json={"from": MAIL_FROM, "to": [to], "subject": subject, "html": html_body},
+                  json={"from": from_addr or MAIL_FROM, "to": [to], "subject": subject, "html": html_body, **({"reply_to": reply_to} if reply_to else {})},
                   timeout=15).raise_for_status()
         return True
     except Exception:  # noqa: BLE001
