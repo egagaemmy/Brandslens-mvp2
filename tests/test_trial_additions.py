@@ -333,3 +333,10 @@ def _default(key):
 def _body_text(step):
     return re.sub(r"<[^>]+>", " ", step["body"])
 
+
+def test_the_day_1_email_tells_the_story_from_the_problem_to_the_solution_and_says_mara_is_made_up():
+    """The follow-up emails may open on the problem: the story must then arrive at what BrandsLens does about it."""
+    body = _body_text(_default("day1_setup"))
+    assert "Mara finds out" in body and "exactly the moment BrandsLens exists to prevent" in body      # problem, then the solution
+    assert "Mara is made up" in body and "three minutes" in body and "{{company}}" in _default("day1_setup")["body"]
+
