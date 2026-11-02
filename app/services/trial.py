@@ -284,8 +284,22 @@ def _utm(utm: dict) -> dict:
     return {f"utm_{k}": clean_tag((utm or {}).get(k, ""), 80 if k in ("campaign", "term", "content") else 60) for k in ("source", "medium", "campaign", "term", "content")}
 
 
+def clean_line(value: str | None, limit: int = 160) -> str:
+    """One tidy line of text from a form: control characters removed, runs of spaces collapsed, cut to the limit."""
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", value or "")
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def split_location(location: str) -> tuple[str, str]:
+    """('Lagos', 'Nigeria') from 'Lagos, Nigeria'. Only a clear 'City, Country' is split: a single word could be either, so it is left alone."""
+    if "," not in location:
+        return "", ""
+    city, _, country = location.rpartition(",")
+    return city.strip()[:120], country.strip()[:120]
+
+
 def start(db: Session, *, email: str, name: str, company: str, consent: bool, utm: dict | None = None,
-          session_id: str = "", ip_hash: str = "", now: datetime | None = None) -> tuple[TrialSignup, str]:
+          session_id: str = "", ip_hash: str = "", now: datetime | None = None, job_title: str = "", location: str = "") -> tuple[TrialSignup, str]:
     """Checks the rules and prepares the emailed code. Returns the lead row and the code (the caller sends it)."""
     now = _now(now)
     email, name, company = normalise_email(email), (name or "").strip(), (company or "").strip()
@@ -323,6 +337,11 @@ def start(db: Session, *, email: str, name: str, company: str, consent: bool, ut
         db.flush()
     code = f"{secrets.randbelow(1_000_000):06d}"
     row.name, row.company = name[:200], company[:200]
+    job_title, location = clean_line(job_title), clean_line(location)
+    if job_title:
+        row.job_title = job_title
+    if location:
+        row.location = location
     if consent:
         row.marketing_consent, row.consent_at, row.unsubscribed_at = True, now, None
     for k, v in _utm(utm or {}).items():
@@ -372,8 +391,9 @@ def verify(db: Session, *, email: str, code: str, password: str, now: datetime |
                        billing_status="trialing", trial_started_at=now, trial_ends_at=ends, trial_ai_drafts=0, trial_ask_messages=0)
     db.add(org)
     db.flush()
+    city, country = split_location(row.location or "")
     owner = OrgMember(organization_id=org.id, email=email, name=row.name, password_hash=hash_password(password), role="owner",
-                      status="active", activated_at=now)
+                      status="active", activated_at=now, job_title=row.job_title or "", city=city, country=country)
     db.add(owner)
     db.flush()
     company = row.company
@@ -410,6 +430,7 @@ def _notify_team_new_lead(row: TrialSignup, ends: datetime) -> None:
         from . import mailer
         src = " / ".join(x for x in (row.utm_source, row.utm_medium, row.utm_campaign) if x) or "direct"
         inner = (f"<p><b>New free trial</b></p><p>{html.escape(row.name)}, {html.escape(row.company)} ({html.escape(row.domain)})<br>"
+                 f"{html.escape(row.job_title or 'No job title')} · {html.escape(row.location or 'No location')}<br>"
                  f"{html.escape(row.email)}<br>Source: {html.escape(src)}<br>Marketing emails: {'yes' if row.marketing_consent else 'no'}<br>"
                  f"Trial ends: {ends.strftime('%d %b %Y %H:%M')} UTC</p>")
         mailer.send_email(LEAD_NOTIFY_EMAIL, f"New trial: {row.company} ({row.domain})", mailer._wrap(inner), from_addr=TRIAL_FROM, reply_to=row.email)
@@ -417,7 +438,7 @@ def _notify_team_new_lead(row: TrialSignup, ends: datetime) -> None:
         log.exception("Could not notify the team of a new trial lead")
 
 
-def request_access(db: Session, *, email: str, name: str, company: str, note: str) -> TrialSignup:
+def request_access(db: Session, *, email: str, name: str, company: str, note: str, job_title: str = "", location: str = "") -> TrialSignup:
     """For someone with no business email. The team reviews the request and approves or ignores it."""
     email, name, company = normalise_email(email), (name or "").strip(), (company or "").strip()
     if len(name) < 2 or len(company) < 2:
@@ -439,10 +460,15 @@ def request_access(db: Session, *, email: str, name: str, company: str, note: st
     if row.status != "approved":
         row.status = "requested"
     row.name, row.company, row.note = name[:200], company[:200], (note or "").strip()[:500]
+    job_title, location = clean_line(job_title), clean_line(location)
+    if job_title:
+        row.job_title = job_title
+    if location:
+        row.location = location
     db.commit()
     try:
         from . import mailer
-        inner = (f"<p><b>Trial access request</b> (no business email)</p><p>{html.escape(name)}, {html.escape(company)}<br>{html.escape(email)}<br>"
+        inner = (f"<p><b>Trial access request</b> (no business email)</p><p>{html.escape(name)}, {html.escape(company)}<br>{html.escape(row.job_title or 'No job title')} · {html.escape(row.location or 'No location')}<br>{html.escape(email)}<br>"
                  f"{html.escape(row.note) or 'No note.'}</p><p>Approve or ignore it in Super Admin, Trials.</p>")
         mailer.send_email(LEAD_NOTIFY_EMAIL, f"Trial access request: {company}", mailer._wrap(inner), from_addr=TRIAL_FROM, reply_to=email)
     except Exception:  # noqa: BLE001
@@ -551,7 +577,7 @@ def _row_dict(db: Session, row: TrialSignup, now: datetime) -> dict:
     now = _now(now)
     org = _org(db, row)
     ws = db.scalar(select(Workspace).where(Workspace.organization_id == org.id)) if org else None
-    return {"id": row.id, "name": row.name, "email": row.email, "company": row.company, "domain": row.domain, "status": row.status, "note": row.note,
+    return {"id": row.id, "name": row.name, "email": row.email, "company": row.company, "job_title": row.job_title or "", "location": row.location or "", "domain": row.domain, "status": row.status, "note": row.note,
             "marketing_consent": bool(row.marketing_consent), "unsubscribed": bool(row.unsubscribed_at),
             "source": row.utm_source, "medium": row.utm_medium, "campaign": row.utm_campaign, "term": row.utm_term, "content": row.utm_content,
             "created_at": row.created_at.isoformat() if row.created_at else None, "started_at": row.started_at.isoformat() if row.started_at else None,
@@ -568,13 +594,13 @@ def list_signups(db: Session, *, status: str = "", q: str = "", limit_: int = 50
         stmt = stmt.where(TrialSignup.status == status)
     if q.strip():
         like = f"%{q.strip().lower()}%"
-        stmt = stmt.where(or_(func.lower(TrialSignup.email).like(like), func.lower(TrialSignup.company).like(like), func.lower(TrialSignup.name).like(like)))
+        stmt = stmt.where(or_(func.lower(TrialSignup.email).like(like), func.lower(TrialSignup.company).like(like), func.lower(TrialSignup.name).like(like), func.lower(TrialSignup.job_title).like(like), func.lower(TrialSignup.location).like(like)))
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(stmt.order_by(TrialSignup.created_at.desc()).limit(max(1, min(limit_, 200))).offset(max(0, offset))).all()
     return {"total": total, "rows": [_row_dict(db, r, now) for r in rows]}
 
 
-CSV_COLUMNS = ["name", "email", "company", "domain", "status", "marketing_consent", "unsubscribed", "created_at", "started_at", "ends_at", "days_left",
+CSV_COLUMNS = ["name", "email", "company", "job_title", "location", "domain", "status", "marketing_consent", "unsubscribed", "created_at", "started_at", "ends_at", "days_left",
                "source", "medium", "campaign", "term", "content", "keywords", "ai_drafts", "ask_messages", "plan", "note"]
 
 

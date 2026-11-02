@@ -41,6 +41,8 @@ class StartBody(BaseModel):
     email: str
     name: str
     company: str
+    job_title: str = ""
+    location: str = ""
     marketing_consent: bool = False
     utm_source: str = ""
     utm_medium: str = ""
@@ -60,6 +62,8 @@ class AccessBody(BaseModel):
     email: str
     name: str
     company: str
+    job_title: str = ""
+    location: str = ""
     note: str = ""
 
 
@@ -78,7 +82,7 @@ def trial_start(body: StartBody, request: Request, db: Session = Depends(get_db)
     if not _start_ip.allow(_ip(request)) or not _start_email.allow(email):
         raise HTTPException(429, "Too many attempts. Please try again later.")
     try:
-        row, code = trial.start(db, email=email, name=body.name, company=body.company, consent=body.marketing_consent,
+        row, code = trial.start(db, email=email, name=body.name, company=body.company, job_title=body.job_title, location=body.location, consent=body.marketing_consent,
                                 utm={"source": body.utm_source, "medium": body.utm_medium, "campaign": body.utm_campaign, "term": body.utm_term,
                                      "content": body.utm_content}, session_id=body.session_id, ip_hash=trial.hash_ip(_ip(request)))
     except trial.TrialError as e:
@@ -105,7 +109,7 @@ def trial_request_access(body: AccessBody, request: Request, db: Session = Depen
     if not _request_ip.allow(_ip(request)):
         raise HTTPException(429, "Too many requests. Please try again later.")
     try:
-        trial.request_access(db, email=body.email, name=body.name, company=body.company, note=body.note)
+        trial.request_access(db, email=body.email, name=body.name, company=body.company, note=body.note, job_title=body.job_title, location=body.location)
     except trial.TrialError as e:
         raise _fail(e)
     return {"received": True}

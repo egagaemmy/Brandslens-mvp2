@@ -709,6 +709,8 @@ class TrialSignup(Base):
     domain: Mapped[str] = mapped_column(String(200), index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     company: Mapped[str] = mapped_column(String(200), default="")
+    job_title: Mapped[str] = mapped_column(String(160), default="")      # the person's designation, as they typed it
+    location: Mapped[str] = mapped_column(String(160), default="")       # where they are, usually "City, Country"
     status: Mapped[str] = mapped_column(String(20), default="pending")   # pending | requested | approved | active | expired | converted | blocked
     note: Mapped[str] = mapped_column(String(500), default="")           # why someone without a business email asked for access
     code_hash: Mapped[str] = mapped_column(String(64), default="")

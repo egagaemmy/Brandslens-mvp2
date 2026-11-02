@@ -153,6 +153,10 @@ parties (e.g., the author of a social media post).
 - **Account data**: name, email address, password (stored as a salted
   Argon2 hash — we never store or can retrieve your actual password).
 - **Organization data**: company name, sector, plan, billing status.
+- **Free trial details**: if you start a free trial we also keep the job
+  title and location you give us, alongside your name, work email and
+  company, so we can understand who is trying BrandsLens and get in touch
+  about your trial.
 - **Usage data**: login timestamps, actions taken within the Service
   (for the Media Room's audit trail — this is a core safety feature, not
   incidental tracking, and is disclosed here for that reason).

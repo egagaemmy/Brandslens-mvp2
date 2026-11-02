@@ -340,3 +340,102 @@ def test_the_day_1_email_tells_the_story_from_the_problem_to_the_solution_and_sa
     assert "Mara finds out" in body and "exactly the moment BrandsLens exists to prevent" in body      # problem, then the solution
     assert "Mara is made up" in body and "three minutes" in body and "{{company}}" in _default("day1_setup")["body"]
 
+
+# ---------------------------------------------------------------- job title and location on the form
+from app.models import OrgMember
+
+
+def start_with(client, db, mails, email="ada@acme-foods.com", **extra):
+    trial.save_settings(db, "test", {"enabled": True})
+    body = {"email": email, "name": "Ada Okafor", "company": "Acme Foods", "marketing_consent": False, **extra}
+    r = client.post("/api/public/trial/start", json=body)
+    assert r.status_code == 200, r.text
+    return r
+
+
+def verify_for(client, mails, email="ada@acme-foods.com"):
+    mail = next(m for m in reversed(mails) if m["to"] == email and "verification code" in m["subject"])
+    code = re.search(r">(\d{6})<", mail["html"]).group(1)
+    r = client.post("/api/public/trial/verify", json={"email": email, "code": code, "password": PASSWORD})
+    assert r.status_code == 200, r.text
+    return r
+
+
+def test_the_job_title_and_location_are_stored_tidied(client, db, mails, chimp):
+    start_with(client, db, mails, job_title="  Head   of  Communications ", location=" Lagos,   Nigeria ")
+    row = db.scalar(select(TrialSignup).where(TrialSignup.email == "ada@acme-foods.com"))
+    assert (row.job_title, row.location) == ("Head of Communications", "Lagos, Nigeria")
+
+
+def test_an_older_form_that_sends_neither_still_works(client, db, mails, chimp):
+    start_with(client, db, mails)
+    row = db.scalar(select(TrialSignup).where(TrialSignup.email == "ada@acme-foods.com"))
+    assert (row.job_title, row.location) == ("", "")
+
+
+def test_odd_characters_are_removed_and_long_text_is_cut(client, db, mails, chimp):
+    start_with(client, db, mails, job_title="Head\x00 of\n\tComms" + "x" * 400, location="Lagos\x07, Nigeria")
+    row = db.scalar(select(TrialSignup).where(TrialSignup.email == "ada@acme-foods.com"))
+    assert "\x00" not in row.job_title and "\n" not in row.job_title and len(row.job_title) <= 160 and row.job_title.startswith("Head of Comms")
+    assert row.location == "Lagos , Nigeria".replace(" ,", ",") or row.location.startswith("Lagos")
+
+
+def test_a_second_attempt_with_blank_fields_does_not_erase_what_was_given(client, db, mails, chimp):
+    start_with(client, db, mails, job_title="CMO", location="Accra, Ghana")
+    later = trial._now(None) + timedelta(minutes=5)                 # past the one-minute wait before another code can be sent
+    trial.start(db, email="ada@acme-foods.com", name="Ada Okafor", company="Acme Foods", consent=False, now=later)
+    row = db.scalar(select(TrialSignup).where(TrialSignup.email == "ada@acme-foods.com"))
+    assert (row.job_title, row.location) == ("CMO", "Accra, Ghana")
+
+
+def test_the_designation_and_a_clear_city_and_country_reach_the_new_owner_profile(client, db, mails, chimp):
+    start_with(client, db, mails, job_title="Head of Communications", location="Lagos, Nigeria")
+    verify_for(client, mails)
+    owner = db.scalar(select(OrgMember).where(OrgMember.email == "ada@acme-foods.com"))
+    assert (owner.job_title, owner.city, owner.country) == ("Head of Communications", "Lagos", "Nigeria")
+
+
+def test_a_single_word_location_is_not_guessed_into_a_city_or_country(client, db, mails, chimp):
+    start_with(client, db, mails, job_title="CMO", location="Nigeria")
+    verify_for(client, mails)
+    owner = db.scalar(select(OrgMember).where(OrgMember.email == "ada@acme-foods.com"))
+    assert owner.job_title == "CMO" and (owner.city, owner.country) == ("", "")
+    assert trial.split_location("Port Harcourt, Rivers, Nigeria") == ("Port Harcourt, Rivers", "Nigeria")
+
+
+def test_someone_asking_for_access_without_a_business_email_gives_them_too(client, db, mails):
+    trial.save_settings(db, "test", {"enabled": True})
+    r = client.post("/api/public/trial/request-access", json={"email": "ada@gmail.com", "name": "Ada Okafor", "company": "Acme Foods", "job_title": "Brand Manager", "location": "Nairobi, Kenya", "note": "No work email yet"})
+    assert r.status_code == 200, r.text
+    row = db.scalar(select(TrialSignup).where(TrialSignup.email == "ada@gmail.com"))
+    assert (row.status, row.job_title, row.location) == ("requested", "Brand Manager", "Nairobi, Kenya")
+    team = next(m for m in mails if m["to"] == "info@brandslens.com")
+    assert "Brand Manager" in team["html"] and "Nairobi, Kenya" in team["html"]
+
+
+def test_the_team_notice_for_a_new_trial_names_the_title_and_location_and_escapes_them(client, db, mails, chimp):
+    start_with(client, db, mails, job_title="<b>Boss</b>", location="Lagos, Nigeria")
+    verify_for(client, mails)
+    notice = next(m for m in mails if m["to"] == "info@brandslens.com" and "New trial" in m["subject"])
+    assert "&lt;b&gt;Boss&lt;/b&gt;" in notice["html"] and "Lagos, Nigeria" in notice["html"] and "<b>Boss</b>" not in notice["html"]
+
+
+def test_the_lead_list_shows_them_and_can_be_searched_by_either(client, db, mails, chimp):
+    start_with(client, db, mails, job_title="Head of Communications", location="Lagos, Nigeria")
+    got = trial.list_signups(db)["rows"][0]
+    assert (got["job_title"], got["location"]) == ("Head of Communications", "Lagos, Nigeria")
+    assert trial.list_signups(db, q="lagos")["total"] == 1 and trial.list_signups(db, q="communications")["total"] == 1 and trial.list_signups(db, q="zzz")["total"] == 0
+
+
+def test_the_csv_has_both_columns_and_a_typed_formula_cannot_run(client, db, mails, chimp):
+    import csv as _csv, io as _io
+    start_with(client, db, mails, job_title="=HYPERLINK(\"http://evil\")", location="Lagos, Nigeria")
+    rows = list(_csv.DictReader(_io.StringIO(trial.export_csv(db))))
+    assert list(rows[0]).index("job_title") == list(rows[0]).index("company") + 1 and list(rows[0]).index("location") == list(rows[0]).index("job_title") + 1
+    assert rows[0]["location"] == "Lagos, Nigeria" and rows[0]["job_title"].startswith("'=")      # the leading quote stops a spreadsheet running it
+
+
+def test_the_default_privacy_policy_says_the_trial_form_collects_job_title_and_location():
+    t = text_of(legal_content)
+    assert "Free trial details" in t and "job\n  title and location" in t
+
