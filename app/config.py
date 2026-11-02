@@ -82,7 +82,7 @@ ADMIN_SETUP_SECRET = env("ADMIN_SETUP_SECRET")  # temporary — protects the one
 MAIL_FROM = env("MAIL_FROM", "watch@mail.brandslens.com")
 # Free-trial emails: sent from the mail subdomain (so the main domain's own mailbox is never put at risk), answered at the real inbox,
 # and every new lead is announced to the team inbox.
-TRIAL_FROM = env("TRIAL_FROM", "BrandsLens <info@mail.brandslens.com>")
+TRIAL_FROM = env("TRIAL_FROM", "Pat from BrandsLens <info@mail.brandslens.com>")
 TRIAL_REPLY_TO = env("TRIAL_REPLY_TO", "info@brandslens.com")
 LEAD_NOTIFY_EMAIL = env("LEAD_NOTIFY_EMAIL", "info@brandslens.com")
 PUBLIC_API_URL = env("PUBLIC_API_URL", "https://brandslens-mvp2.onrender.com")   # where the one-click unsubscribe link points

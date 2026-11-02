@@ -786,6 +786,7 @@ class CheckoutBody(BaseModel):
     provider: str = "stripe"
     quantity: int = 1
     pay_in_ngn: bool = False
+    promo_code: str = ""        # an offer code such as TRIAL15 (annual plans, card checkout only)
 
 
 @app.post("/api/billing/checkout")
@@ -796,17 +797,42 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
     if body.quantity < 1 or body.quantity > max_quantity:
         raise HTTPException(422, f"For {body.cycle} billing, quantity must be between 1 and {max_quantity}.")
     org = db.get(Organization, member.organization_id)
+    # An offer code is checked BEFORE a payment link exists, and one that cannot be used is refused with the reason, so nobody pays
+    # full price believing they were discounted. Same rules and same wording as at sign-up.
+    promo = None
+    if body.promo_code.strip():
+        if body.provider != "flutterwave":
+            raise HTTPException(422, "Offer codes can be used with card checkout only.")
+        try:
+            promo = promos.get_valid(db, body.promo_code, body.plan, body.cycle)
+        except promos.PromoError as e:
+            raise HTTPException(422, str(e))
     try:
         if body.provider == "stripe":
             url = billing.create_stripe_checkout(db, org, body.plan, body.cycle, member.email)
         elif body.provider == "paystack":
             url = billing.create_paystack_checkout(db, org, body.plan, body.cycle, member.email)
         elif body.provider == "flutterwave":
-            url = billing.create_flutterwave_checkout(db, org, body.plan, body.cycle, member.email, body.quantity, body.pay_in_ngn)
+            url = billing.create_flutterwave_checkout(db, org, body.plan, body.cycle, member.email, body.quantity, body.pay_in_ngn,
+                                                  promo_percent=promo.percent if promo else 0)
         else:
             raise HTTPException(422, "provider must be 'stripe', 'paystack', or 'flutterwave'")
     except BillingNotConfigured as e:
         raise HTTPException(409, str(e))
+    if promo:       # recorded in its OWN step, after the payment link exists, so the launch report can never get in the way of paying
+        try:
+            from .models import new_id
+            from .services import trial as trial_svc
+            price = billing.signup_pricing(db, body.plan, body.cycle, body.quantity, promo.percent, body.pay_in_ngn)
+            lead = trial_svc._signup_for(db, org.id)          # a trial lead already carries where they came from
+            utm = {k: getattr(lead, f"utm_{k}", "") or "" for k in ("source", "medium", "campaign", "term", "content")}
+            row = promos.record_started(db, new_id(), member.email, body.plan, body.cycle, utm, getattr(lead, "session_id", "") or "",
+                                        promo, price["discount"], price["amount"], price["currency"])
+            row.organization_id = org.id
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            log.exception("Offer-code attribution could not be recorded for organisation %s (checkout itself continues)", org.id)
     return {"checkout_url": url}
 
 

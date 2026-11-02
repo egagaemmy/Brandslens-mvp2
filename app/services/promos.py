@@ -122,6 +122,28 @@ def mark_paid(db: Session, pending_id: str, org_id: str, charged: float | None =
     return True
 
 
+def mark_org_paid(db: Session, org_id: str, plan: str, cycle: str, charged: float | None = None, currency: str | None = None) -> bool:
+    """The signed-in counterpart of mark_paid, for an existing account (for example a free-trial user) paying with an offer code.
+    Matches the newest 'started' record for this organisation, plan and cycle, and ONLY if the amount really paid equals the discounted
+    amount that was quoted, so paying full price some other way can never be counted as a redemption of the code."""
+    if not org_id:
+        return False
+    row = db.scalar(select(SignupAttribution).where(SignupAttribution.organization_id == org_id, SignupAttribution.status == "started",
+                                                    SignupAttribution.plan == plan, SignupAttribution.cycle == cycle,
+                                                    SignupAttribution.promo_code != "").order_by(SignupAttribution.created_at.desc()))
+    if not row:
+        return False
+    if charged is not None and abs(float(charged) - float(row.charged_amount)) > 0.01:
+        return False
+    row.status, row.paid_at = "paid", row.paid_at or now_utc()
+    if charged is not None:
+        row.charged_amount = float(charged)
+    if currency:
+        row.currency = currency
+    db.commit()
+    return True
+
+
 # ---------------------------------------------------------------- the visit tracker
 
 def clean_event(kind, session_id, source, medium, campaign, path, term="", content="") -> dict | None:

@@ -138,7 +138,7 @@ def test_the_code_email_comes_from_the_trial_sender_and_replies_go_to_the_real_i
     open_trials(db)
     assert begin(client).status_code == 200
     m = mails[0]
-    assert m["to"] == "ada@acme-foods.com" and m["from"] == "BrandsLens <info@mail.brandslens.com>" and m["reply_to"] == "info@brandslens.com"
+    assert m["to"] == "ada@acme-foods.com" and m["from"] == "Pat from BrandsLens <info@mail.brandslens.com>" and m["reply_to"] == "info@brandslens.com"
     assert re.search(r">\d{6}<", m["html"])
     row = db.scalar(select(TrialSignup))
     assert row.status == "pending" and len(row.code_hash) == 64 and code_for(mails, "ada@acme-foods.com") not in row.code_hash
@@ -198,8 +198,8 @@ def test_the_team_hears_about_every_new_lead_and_the_person_gets_a_welcome(clien
     start_trial(client, db, mails, utm_source="producthunt", utm_medium="launch", utm_campaign="official_launch")
     notice = next(m for m in mails if m["to"] == "info@brandslens.com")
     assert "Acme Foods" in notice["subject"] and "producthunt / launch / official_launch" in notice["html"] and notice["reply_to"] == "ada@acme-foods.com"
-    welcome = next(m for m in mails if m["to"] == "ada@acme-foods.com" and "trial has started" in m["subject"])
-    assert welcome["from"] == "BrandsLens <info@mail.brandslens.com>" and "{{" not in welcome["html"]
+    welcome = next(m for m in mails if m["to"] == "ada@acme-foods.com" and "trial is live" in m["subject"])
+    assert welcome["from"] == "Pat from BrandsLens <info@mail.brandslens.com>" and "{{" not in welcome["html"]
 
 
 def test_campaign_tags_and_consent_are_recorded_as_given(client, db, mails):
@@ -545,7 +545,7 @@ def test_each_email_goes_out_once_at_its_time_and_never_twice(client, db, mails)
     assert trial.run_nurture_for(db, row, t0 + timedelta(days=1, minutes=1)) == 1
     assert trial.run_nurture_for(db, row, t0 + timedelta(days=1, minutes=5)) == 0
     assert trial.run_nurture_for(db, row, t0 + timedelta(days=3, minutes=1)) == 1
-    assert sent_to(mails, "ada@acme-foods.com") == ["Your first alert in 3 minutes", "Why the first 4 hours matter"]
+    assert sent_to(mails, "ada@acme-foods.com") == ["It's 2am and someone is talking about your brand", "The first four hours"]
 
 
 def test_only_the_latest_due_email_is_sent_so_nobody_gets_a_burst(client, db, mails):
@@ -553,7 +553,7 @@ def test_only_the_latest_due_email_is_sent_so_nobody_gets_a_burst(client, db, ma
     row, t0 = db.scalar(select(TrialSignup)), db.scalar(select(TrialSignup)).started_at
     mails.clear()
     assert trial.run_nurture_for(db, row, t0 + timedelta(days=15)) == 1
-    assert sent_to(mails, "ada@acme-foods.com") == ["Show leadership what you found"]
+    assert sent_to(mails, "ada@acme-foods.com") == ["The conversation with the boss"]
     skipped = {e.step_key for e in db.scalars(select(TrialEmail).where(TrialEmail.skipped == True)).all()}         # noqa: E712
     assert {"day1_setup", "day3_clock", "day7_respond"} <= skipped
 
@@ -565,9 +565,9 @@ def test_tips_and_offers_go_only_to_people_who_agreed_but_trial_notices_go_to_ev
     trial.run_nurture_for(db, row, t0 + timedelta(days=1, minutes=1))                  # a tip: needs consent
     assert sent_to(mails, "ada@acme-foods.com") == []
     trial.run_nurture_for(db, row, t0 + timedelta(days=27, minutes=1))                 # "ends in 3 days": part of the service
-    assert sent_to(mails, "ada@acme-foods.com") == ["Your trial ends in 3 days"]
+    assert sent_to(mails, "ada@acme-foods.com") == ["Three days left on your trial"]
     trial.run_nurture_for(db, row, row.ends_at + timedelta(minutes=1))
-    assert "Your BrandsLens trial has ended" in sent_to(mails, "ada@acme-foods.com")
+    assert "Your trial has ended, but your workspace is safe" in sent_to(mails, "ada@acme-foods.com")
 
 
 def test_unsubscribing_stops_tips_through_a_working_one_click_link(client, db, mails):
@@ -591,7 +591,7 @@ def test_unsubscribing_stops_tips_through_a_working_one_click_link(client, db, m
 def test_tips_carry_an_unsubscribe_link_and_notices_do_not_and_values_are_escaped(client, db, mails):
     start_trial(client, db, mails, company="<script>alert(1)</script> Ltd")
     row, t0 = db.scalar(select(TrialSignup)), db.scalar(select(TrialSignup)).started_at
-    welcome = next(m for m in mails if "trial has started" in m["subject"])
+    welcome = next(m for m in mails if "trial is live" in m["subject"])
     assert "<script>" not in welcome["html"] and "&lt;script&gt;" in welcome["html"] and "Unsubscribe" not in welcome["html"]
     mails.clear()
     trial.run_nurture_for(db, row, t0 + timedelta(days=1, minutes=1))
@@ -606,7 +606,7 @@ def test_the_launch_code_appears_in_the_ending_emails_only_when_one_is_set(clien
     assert "Use code" not in mails[-1]["html"]
     trial.save_settings(db, "t", {"offer_code": "trial15"})
     trial.run_nurture_for(db, row, t0 + timedelta(days=27, minutes=1))
-    assert "Use code <b>TRIAL15</b>" in mails[-1]["html"]
+    assert "Your offer code <b>TRIAL15</b>" in mails[-1]["html"]
 
 
 def test_a_short_trial_skips_the_steps_that_would_not_fit(client, db, mails):
@@ -629,7 +629,7 @@ def test_the_scheduled_run_ends_due_trials_and_sends_the_ending_email(client, db
     assert out["expired"] == 1
     db.expire_all()
     assert db.get(Organization, org.id).billing_status == "unpaid" and db.scalar(select(TrialSignup)).status == "expired"
-    assert "Your BrandsLens trial has ended" in sent_to(mails, "ada@acme-foods.com")
+    assert "Your trial has ended, but your workspace is safe" in sent_to(mails, "ada@acme-foods.com")
     assert trial.run_lifecycle(db) == {"expired": 0, "emails": 0}
 
 
@@ -644,7 +644,7 @@ def test_a_paying_customer_is_no_longer_nurtured_as_a_trial_lead(client, db, mai
 def test_the_team_can_send_themselves_a_test_of_any_email(client, db, mails, admin):
     r = client.post("/api/admin/trials/nurture/test", headers=admin, json={"step_key": "day3_clock", "to": "me@brandslens.com"})
     assert r.status_code == 200 and r.json() == {"sent": True}
-    assert mails[-1]["to"] == "me@brandslens.com" and "first 4 hours" in mails[-1]["subject"] and "Ada" in mails[-1]["html"]
+    assert mails[-1]["to"] == "me@brandslens.com" and "first four hours" in mails[-1]["subject"] and "Ada" in mails[-1]["html"]
     assert client.post("/api/admin/trials/nurture/test", headers=admin, json={"step_key": "nope", "to": "me@brandslens.com"}).status_code == 422
     assert client.post("/api/admin/trials/nurture/test", headers=admin, json={"step_key": "welcome", "to": "bad"}).status_code == 422
 

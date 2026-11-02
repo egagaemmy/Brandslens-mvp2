@@ -601,39 +601,56 @@ def _step(key, label, kind, when, days, subject, body):
 
 
 _CTA = '<p><a href="{{app_url}}/login" style="background:#1D4ED8;color:#ffffff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Open your dashboard</a></p>'
-_SIGN = "<p>Emmanuel<br>Founder, BrandsLens</p>"
+_BTN = '<p><a href="{{upgrade_url}}" style="background:#1D4ED8;color:#ffffff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Choose a plan</a></p>'
+_SIGN = "<p>Pat from BrandsLens</p>"
+# The marketing emails tell one short story across the trial, about Mara, an invented communications lead, so that no real customer or
+# result is ever claimed. The emails about the trial itself (welcome, 3 days, 1 day, ended) stay plain and clear, because they go to everyone.
 DEFAULT_STEPS = [
-    _step("welcome", "Welcome (sent at once)", "transactional", "after_start", 0, "Your BrandsLens trial has started",
-          "<p>Hi {{first_name}},</p><p>Your free BrandsLens trial is live, and it runs until <b>{{ends_on}}</b>. You've got a real Professional workspace for {{company}}, with some limits so you can feel the product without the full load.</p>"
-          "<p>Start here: check the five keywords we set up for you, then watch what comes in. Anything serious is scored HIGH, MEDIUM or WATCH.</p>" + _CTA +
-          "<p>Reply to this email any time and I'll help.</p>" + _SIGN),
-    _step("day1_setup", "Day 1: set up", "marketing", "after_start", 1, "Your first alert in 3 minutes",
-          "<p>Hi {{first_name}},</p><p>The fastest way to see BrandsLens work is to make sure it is watching the right things. Open <b>Settings</b>, review your keywords, and add the names people use for {{company}}.</p>"
-          "<p>Within minutes you'll start seeing mentions, each scored so the serious ones rise to the top.</p>" + _CTA + _SIGN),
-    _step("day3_clock", "Day 3: the response clock", "marketing", "after_start", 3, "Why the first 4 hours matter",
-          "<p>Hi {{first_name}},</p><p>When a mention is scored HIGH, BrandsLens opens a case and starts a response clock (4 hours for HIGH). That clock is the point: a problem is decided in the first hours, not the first week.</p>"
-          "<p>Open the <b>Media Room</b> to see how a case is tracked from detection to a sent statement.</p>" + _CTA + _SIGN),
-    _step("day7_respond", "Day 7: respond", "marketing", "after_start", 7, "From alert to an approved statement",
-          "<p>Hi {{first_name}},</p><p>Seen something worth answering? Use <b>AI Draft Statement</b> on a case to get a first draft, edit it, and send it only after it is approved. You stay in control and still move fast.</p>" + _CTA + _SIGN),
-    _step("day14_prove", "Day 14: prove it", "marketing", "after_start", 14, "Show leadership what you found",
-          "<p>Hi {{first_name}},</p><p>Two weeks in, you can turn what BrandsLens found into something leadership understands: Share of Voice, Estimated Media Value and a report you can download.</p>" + _CTA + _SIGN),
-    _step("before_end_7", "7 days before the end", "marketing", "before_end", 7, "7 days left on your trial",
-          "<p>Hi {{first_name}},</p><p>Your trial ends on <b>{{ends_on}}</b>. If BrandsLens has been useful, you can choose a plan any time and keep your workspace exactly as it is. Paid plans also remove the trial limits.</p>"
-          "{{offer_line}}<p><a href=\"{{upgrade_url}}\" style=\"background:#1D4ED8;color:#ffffff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block\">Choose a plan</a></p>" + _SIGN),
-    _step("before_end_3", "3 days before the end", "transactional", "before_end", 3, "Your trial ends in 3 days",
-          "<p>Hi {{first_name}},</p><p>Your free trial ends on <b>{{ends_on}}</b>, in about {{days_left}} days. After that your workspace is paused until you choose a plan.</p>"
-          "{{offer_line}}<p><a href=\"{{upgrade_url}}\">Choose a plan</a></p>" + _SIGN),
+    _step("welcome", "Welcome (sent at once)", "transactional", "after_start", 0, "Your BrandsLens trial is live",
+          "<p>Hi {{first_name}},</p><p>Pat here, from BrandsLens. Your trial is live and it runs until <b>{{ends_on}}</b>. We've set up a real workspace for {{company}}, with {{starter_phrase}} already watching the web for you.</p>"
+          "<p>Here's what I'd do first: open your dashboard and see what has come in. Every mention is scored HIGH, MEDIUM or WATCH, and that scoring is the heart of BrandsLens. It tells you what is serious before you have read a single post.</p>" + _CTA +
+          "<p>Reply to this email any time and a real person will help.</p>" + _SIGN),
+    _step("day1_setup", "Day 1: set up", "marketing", "after_start", 1, "It's 2am and someone is talking about your brand",
+          "<p>Hi {{first_name}},</p><p>Picture Mara. She leads communications for a growing food company. It's 2am, and a post claiming her brand is handing out fake discount vouchers has started to spread. Her phone is silent. Her team is asleep. Nobody knows yet.</p>"
+          "<p>(Mara is made up, but if you work in communications, you have probably met her.)</p>"
+          "<p>By breakfast the post has been shared thousands of times, and her CEO forwards it with one line: \"Did you see this?\" Mara finds out about the problem from her boss. That is exactly the moment BrandsLens exists to prevent.</p>"
+          "<p><b>Your first job, three minutes:</b> open <b>Settings</b>, check the keywords we set up, and add the names people really use for {{company}}: nicknames, product names, common misspellings. The wider the net, the earlier you hear.</p>" + _CTA + _SIGN),
+    _step("day3_clock", "Day 3: the response clock", "marketing", "after_start", 3, "The first four hours",
+          "<p>Hi {{first_name}},</p><p>Let's go back to Mara, but this time she is using BrandsLens. At 2:07am that same post is scored HIGH and a case opens in the Media Room. A four-hour response clock starts, and the right people are alerted.</p>"
+          "<p>She doesn't wake up to a crisis. She wakes up to a plan.</p>"
+          "<p>That clock is the whole point. A problem is decided in the first hours, not the first week. Open the <b>Media Room</b> and follow a case from detection all the way to a sent statement.</p>" + _CTA + _SIGN),
+    _step("day7_respond", "Day 7: respond", "marketing", "after_start", 7, "What Mara actually sent",
+          "<p>Hi {{first_name}},</p><p>By 6am Mara had a statement ready. She didn't write it from scratch at dawn. BrandsLens drafted a first version, she edited it until it sounded like her company, and her head of legal approved it. Nothing went out until someone said yes.</p>"
+          "<p>That is the part people don't expect: speed and control, together.</p>"
+          "<p>On any case, try <b>AI Draft Statement</b>, change a few words, and watch how the approval step works. Your trial includes a limited number of AI drafts. On a paid plan the trial limits come off, so a busy week never runs you out.</p>" + _CTA + _SIGN),
+    _step("day14_prove", "Day 14: prove it", "marketing", "after_start", 14, "The conversation with the boss",
+          "<p>Hi {{first_name}},</p><p>A week after the scare, Mara's CEO asked the question that decides whether communications gets budget: \"So what did all that monitoring actually do for us?\"</p>"
+          "<p>Mara opened her BrandsLens report. How much of the conversation was about her brand compared with her competitors (Share of Voice). What that coverage would have cost as advertising (Estimated Media Value). And the one incident that never became a headline. She didn't need a speech. She had a page.</p>"
+          "<p>You're two weeks in. Open <b>Reports</b>, download one, and see whether it tells your story. Reports come in Excel, PDF and PowerPoint, depending on your plan.</p>"
+          "<p>If it does, you have {{days_left_phrase}} left. This is a good time to look at what a full plan adds: more keywords, more teammates, more workspaces.</p>" + _CTA + _SIGN),
+    _step("before_end_7", "7 days before the end", "marketing", "before_end", 7, "One week left, and what changes next",
+          "<p>Hi {{first_name}},</p><p>Your trial ends on <b>{{ends_on}}</b>, so here is the honest picture of what you've been working with, and what a full plan opens up.</p>"
+          "<p>During your trial you've had {{limits_phrase}}. That is enough to feel how BrandsLens works, but real monitoring needs a wider net. Standard watches 25 keywords. Growth and Professional watch as many as you need, with more workspaces for more brands and more teammates alongside you.</p>"
+          "<p>If BrandsLens has been useful, choose a plan and your workspace carries on exactly as it is. Nothing to set up again.</p>"
+          "{{offer_line}}" + _BTN + _SIGN),
+    _step("before_end_3", "3 days before the end", "transactional", "before_end", 3, "Three days left on your trial",
+          "<p>Hi {{first_name}},</p><p>A clear heads-up: your free trial ends on <b>{{ends_on}}</b>, in about {{days_left_phrase}}. When it ends, monitoring for {{company}} pauses, and your workspace is kept exactly as you left it until you choose a plan.</p>"
+          "<p>To keep going without a gap, choose a plan before then.</p>"
+          "{{offer_line}}" + _BTN + _SIGN),
     _step("before_end_1", "1 day before the end", "transactional", "before_end", 1, "Your trial ends tomorrow",
-          "<p>Hi {{first_name}},</p><p>A quick reminder: your free trial ends on <b>{{ends_on}}</b>. To keep monitoring {{company}} without a break, choose a plan before then.</p>"
-          "<p><a href=\"{{upgrade_url}}\">Choose a plan</a></p>" + _SIGN),
-    _step("ended", "When it ends", "transactional", "after_end", 0, "Your BrandsLens trial has ended",
-          "<p>Hi {{first_name}},</p><p>Your free trial has ended and monitoring is paused. Your workspace is kept, so if you choose a plan you can pick up where you left off.</p>"
-          "{{offer_line}}<p><a href=\"{{upgrade_url}}\">Choose a plan</a></p><p>If something stopped you from continuing, just reply and tell me.</p>" + _SIGN),
-    _step("after_end_3", "3 days after the end", "marketing", "after_end", 3, "Pick up where you left off",
-          "<p>Hi {{first_name}},</p><p>Your {{company}} workspace is still here. Choose a plan and monitoring resumes straight away, with everything you set up still in place.</p>"
-          "{{offer_line}}<p><a href=\"{{upgrade_url}}\">Choose a plan</a></p>" + _SIGN),
+          "<p>Hi {{first_name}},</p><p>Quick one: your trial ends tomorrow, <b>{{ends_on}}</b>. If you want {{company}} to stay covered without a break, now is the moment to choose a plan.</p>"
+          "<p>And if BrandsLens isn't right for you, that is completely fine. I'd still love to hear why, so just reply.</p>"
+          "{{offer_line}}" + _BTN + _SIGN),
+    _step("ended", "When it ends", "transactional", "after_end", 0, "Your trial has ended, but your workspace is safe",
+          "<p>Hi {{first_name}},</p><p>Your free trial has ended and monitoring is paused. Your workspace is kept exactly as you left it, so if you choose a plan you pick up right where you stopped.</p>"
+          "{{offer_line}}" + _BTN + "<p>If something got in the way, or you'd like to talk it through, just reply to this email.</p>" + _SIGN),
+    _step("after_end_3", "3 days after the end", "marketing", "after_end", 3, "While you were away",
+          "<p>Hi {{first_name}},</p><p>Remember Mara? Her story ends quietly. Because she heard first, her team answered calmly, customers got a clear message, and the fake voucher post never became the story.</p>"
+          "<p>Yours is a story that hasn't happened yet. Your {{company}} workspace is still here, every keyword and setting where you left it. Choose a plan and monitoring picks up straight away.</p>"
+          "{{offer_line}}" + _BTN + _SIGN),
     _step("after_end_10", "10 days after the end", "marketing", "after_end", 10, "Still thinking it over?",
-          "<p>Hi {{first_name}},</p><p>If you have questions about plans, or want a walk-through for your team, reply to this email and I'll arrange it.</p>" + _SIGN),
+          "<p>Hi {{first_name}},</p><p>No hard sell, I promise. If something about BrandsLens didn't fit, I'd genuinely like to know. Even one line helps. And if you'd like a short walk-through for your team before you decide, just reply and we'll set one up.</p>"
+          "{{offer_line}}<p><a href=\"{{upgrade_url}}\">Choose a plan</a></p>" + _SIGN),
 ]
 STEP_KEYS = {s["key"] for s in DEFAULT_STEPS}
 
@@ -705,13 +722,38 @@ def due_steps(db: Session, row: TrialSignup, now: datetime) -> list[tuple[dateti
     return sorted(out, key=lambda x: x[0])
 
 
+_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+
+
+def _count(n: int, noun: str) -> str:
+    """'one workspace', 'five keywords': the number as a word up to ten, the noun in the right form."""
+    return f"{_WORDS.get(n, str(n))} {noun}{'' if n == 1 else 's'}"
+
+
+def starter_phrase(keyword_cap: int) -> str:
+    """What the welcome email says the new workspace starts with. It matches what verify() really creates (at most five)."""
+    return _count(max(1, min(5, int(keyword_cap))), "starter keyword")
+
+
+def limits_phrase(workspaces: int, keywords: int) -> str:
+    return f"{_count(int(workspaces), 'workspace')} and {_count(int(keywords), 'keyword')}"
+
+
+def days_phrase(n: int) -> str:
+    n = max(0, int(n))
+    return f"{n} day{'' if n == 1 else 's'}"
+
+
 def _vars(db: Session, row: TrialSignup) -> dict:
     ends = aware(row.ends_at)
     code = get_settings(db)["offer_code"]
-    offer = (f"<p>Use code <b>{html.escape(code)}</b> at checkout for your launch discount.</p>" if code else "")
+    offer = (f"<p>Your offer code <b>{html.escape(code)}</b> is already filled in when you use the button below, so your discount is taken care of.</p>" if code else "")
+    caps = get_settings(db).get("caps") or DEFAULT_CAPS
     return {"first_name": html.escape((row.name or "").split(" ")[0] or "there"), "company": html.escape(row.company or "your company"),
             "ends_on": ends.strftime("%d %B %Y") if ends else "", "days_left": str(days_left(row.ends_at)), "app_url": APP_URL,
-            "upgrade_url": f"{APP_URL}/billing", "offer_line": offer,
+            "days_left_phrase": days_phrase(days_left(row.ends_at)), "starter_phrase": starter_phrase(caps.get("keywords", 5)),
+            "limits_phrase": limits_phrase(caps.get("workspaces", 1), caps.get("keywords", 5)),
+            "upgrade_url": f"{APP_URL}/billing" + (f"?promo={code}" if code else ""), "offer_line": offer,
             "unsubscribe_url": f"{PUBLIC_API_URL}/api/public/trial/unsubscribe?token={row.unsub_token}"}
 
 
@@ -722,6 +764,8 @@ def render(text: str, variables: dict) -> str:
 def build_email(db: Session, row: TrialSignup, step: dict) -> tuple[str, str]:
     from . import mailer
     v = _vars(db, row)
+    if step["kind"] != "marketing" and not row.marketing_consent:       # a service message about the trial: no promotion unless they agreed to hear from us
+        v["offer_line"], v["upgrade_url"] = "", f"{APP_URL}/billing"
     foot = ('<p style="color:#6b7280;font-size:12px">You are getting this because you started a BrandsLens free trial. '
             f'<a href="{v["unsubscribe_url"]}">Unsubscribe</a> from tips and offers.</p>' if step["kind"] == "marketing" else
             '<p style="color:#6b7280;font-size:12px">This is a message about your BrandsLens trial. Just reply if you need anything.</p>')

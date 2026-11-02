@@ -246,7 +246,7 @@ def create_flutterwave_checkout_for_signup(db: Session, pending_id: str, plan: s
 
 
 def create_flutterwave_checkout(db: Session, org: Organization, plan: str, cycle: str, customer_email: str,
-                                quantity: int = 1, pay_in_ngn: bool = False) -> str:
+                                quantity: int = 1, pay_in_ngn: bool = False, promo_percent: int = 0) -> str:
     """Flutterwave's Standard Checkout: a single POST returns a hosted
     payment link, same shape as Paystack's initialize call.
 
@@ -284,6 +284,17 @@ def create_flutterwave_checkout(db: Session, org: Organization, plan: str, cycle
     price_key, _, _, flutterwave_key = CYCLE_KEYS[cycle]
     base_price = catalog[price_key]
     tx_ref = f"blens-{org.id}-{plan}-{cycle}-{int(now_utc().timestamp())}"
+    if promo_percent:
+        # An offer code for a signed-in account (for example a free-trial user buying). Exactly as at sign-up: a recurring Flutterwave plan
+        # cannot be lowered for one customer, so a discounted first year is a one-time prepaid year. The ordinary no-code path below is untouched.
+        price = signup_pricing(db, plan, cycle, quantity, promo_percent, pay_in_ngn)
+        meta = {"organization_id": org.id, "plan": plan, "cycle": cycle, "quantity": quantity, "promo_percent": promo_percent}
+        if pay_in_ngn:
+            return _flutterwave_initiate_payment(
+                tx_ref=tx_ref, amount=price["amount"], redirect_url=f"{APP_URL}/billing/success", customer_email=customer_email,
+                meta={**meta, "one_time": True}, payment_plan=None, currency="NGN", payment_options="card, banktransfer, ussd, account")
+        return _flutterwave_initiate_payment(tx_ref=tx_ref, amount=price["amount"], redirect_url=f"{APP_URL}/billing/success",
+                                             customer_email=customer_email, meta=meta, payment_plan=None)
     if pay_in_ngn:
         return _flutterwave_initiate_payment(
             tx_ref=tx_ref, amount=round(base_price * quantity * get_ngn_rate(db), 2),
@@ -643,6 +654,11 @@ def handle_flutterwave_webhook(db: Session, payload: bytes, signature_header: st
             else:
                 _activate_plan(db, org_id, plan, "flutterwave", str(data.get("customer", {}).get("id", "")),
                                str(data.get("id", "")), paid_until=paid_until, cycle=cycle)
+                try:                                    # a signed-in account that paid with an offer code: count the redemption
+                    from . import promos
+                    promos.mark_org_paid(db, org_id, plan, cycle, data.get("amount"), data.get("currency"))
+                except Exception:  # noqa: BLE001 - the launch report must never disturb a real, paid account
+                    log.exception("Offer-code redemption could not be recorded for organisation %s (the plan itself was activated)", org_id)
         else:
             log.warning("Flutterwave webhook claimed success but server-side verification disagreed — nothing activated or created for %s",
                        pending_signup_id or org_id)
