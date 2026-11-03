@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import LaunchEvent, PromoCode, SignupAttribution, aware, now_utc
+from .settings import get_setting, set_setting
 
 CODE_RE = re.compile(r"^[A-Z0-9]{3,24}$")
 EVENT_KINDS = ("visit", "demo_click", "demo_start", "cta_click")
@@ -257,3 +258,71 @@ def seed_launch_codes(db: Session, percent: int = 15, starts_on: str = "2026-11-
     db.commit()
     return {"created": created, "already_existed": kept, "percent": percent,
             "valid_from_utc": start.isoformat(), "valid_until_utc": end.isoformat()}
+
+
+# ---------------------------------------------------------------- the standing first-purchase offer
+# Independent of any launch. One ordinary offer code (for example FIRST15) is named in the settings, and from then on it is applied BY ITSELF to
+# every customer's first purchase, with the same rules as any code: a percentage off the first year of an annual plan, then full price at renewal.
+# Because it is an ordinary code, its dates, its cap, its on/off switch and its redemptions all work as they do for every other code, and it appears
+# in the launch report like one. The server decides: the screens only show what the server will charge.
+STANDING_KEY = "promo:standing_code"
+
+
+def standing_code(db: Session) -> str:
+    """The code applied automatically to every first purchase. Empty means there is no standing offer."""
+    return normalise(get_setting(db, STANDING_KEY, "") or "", limit=None)
+
+
+def set_standing_code(db: Session, code: str, by: str = "") -> None:
+    set_setting(db, STANDING_KEY, normalise(code, limit=None) if code else "", by)
+
+
+def has_paid_before(db: Session, org) -> bool:
+    """True if this organisation has ever really paid (or is a team account). A free trial or an account that never paid has not."""
+    if org.billing_status in ("active", "past_due", "cancelled", "exempt"):
+        return True
+    if org.plan_activated_at or org.paid_until or org.billing_subscription_id or org.billing_customer_id or org.billing_provider or org.billing_cycle:
+        return True
+    return bool(db.scalar(select(SignupAttribution.id).where(SignupAttribution.organization_id == org.id, SignupAttribution.status == "paid")))
+
+
+def standing_promo(db: Session, plan: str, cycle: str, *, first_purchase: bool, now: datetime | None = None) -> PromoCode | None:
+    """The standing offer, if this purchase qualifies: a first purchase, an annual plan, and the code is live. Never raises."""
+    if not first_purchase:
+        return None
+    code = standing_code(db)
+    if not code:
+        return None
+    try:
+        return get_valid(db, code, plan, cycle, now)
+    except PromoError:
+        return None
+
+
+def choose_offer(typed: PromoCode | None, standing: PromoCode | None) -> PromoCode | None:
+    """One offer per purchase, never two added together: the better of a typed code and the standing offer. On a tie the typed code wins,
+    so a platform code such as PH15 still shows up against its platform in the launch report."""
+    if typed and standing:
+        return standing if standing.percent > typed.percent else typed
+    return typed or standing
+
+
+def standing_status(db: Session, now: datetime | None = None) -> dict:
+    """What anyone may be told about the offer: is it on right now, and for how much."""
+    code = standing_code(db)
+    if not code:
+        return {"active": False}
+    try:
+        promo = get_valid(db, code, "growth", "annual", now)
+    except PromoError:
+        return {"active": False}
+    return {"active": True, "code": promo.code, "percent": promo.percent, "message": f"{promo.percent}% off your first year, applied automatically."}
+
+
+def standing_for_org(db: Session, org) -> dict | None:
+    """The offer as it applies to a signed-in organisation: None once they have paid before (or are a team account)."""
+    if has_paid_before(db, org):
+        return None
+    status = standing_status(db)
+    return {k: status[k] for k in ("code", "percent", "message")} if status["active"] else None
+

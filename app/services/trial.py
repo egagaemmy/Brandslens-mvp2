@@ -774,6 +774,11 @@ def _vars(db: Session, row: TrialSignup) -> dict:
     ends = aware(row.ends_at)
     code = get_settings(db)["offer_code"]
     offer = (f"<p>Your offer code <b>{html.escape(code)}</b> is already filled in when you use the button below, so your discount is taken care of.</p>" if code else "")
+    if not code:
+        from . import promos
+        standing = promos.standing_status(db)
+        if standing["active"]:        # no code to type: the first-purchase offer is applied by itself at checkout
+            offer = f"<p>As a new customer you get <b>{standing['percent']}% off your first year</b> of an annual plan, taken off by itself when you choose it. There is no code to type.</p>"
     caps = get_settings(db).get("caps") or DEFAULT_CAPS
     return {"first_name": html.escape((row.name or "").split(" ")[0] or "there"), "company": html.escape(row.company or "your company"),
             "ends_on": ends.strftime("%d %B %Y") if ends else "", "days_left": str(days_left(row.ends_at)), "app_url": APP_URL,

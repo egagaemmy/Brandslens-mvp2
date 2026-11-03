@@ -807,6 +807,9 @@ def start_checkout(body: CheckoutBody, member: OrgMember = Depends(require_role(
             promo = promos.get_valid(db, body.promo_code, body.plan, body.cycle)
         except promos.PromoError as e:
             raise HTTPException(422, str(e))
+    # The standing first-purchase offer: only for an account that has never paid, and only on card checkout (the same limit as any code).
+    if body.provider == "flutterwave":
+        promo = promos.choose_offer(promo, promos.standing_promo(db, body.plan, body.cycle, first_purchase=not promos.has_paid_before(db, org)))
     try:
         if body.provider == "stripe":
             url = billing.create_stripe_checkout(db, org, body.plan, body.cycle, member.email)
@@ -890,6 +893,8 @@ def start_pending_checkout(body: PendingCheckoutBody, db: Session = Depends(get_
             promo = promos.get_valid(db, body.promo_code, body.plan, body.cycle)
         except promos.PromoError as e:
             raise HTTPException(422, str(e))
+    # The standing first-purchase offer applies by itself (a new customer is always making a first purchase). Never added to a typed code.
+    promo = promos.choose_offer(promo, promos.standing_promo(db, body.plan, body.cycle, first_purchase=True))
 
     pending = PendingSignup(
         tx_ref="",  # set below, once we have the real one from Flutterwave's initiation call
@@ -1007,7 +1012,7 @@ def view_as(body: ViewAsBody, member: OrgMember = Depends(current_member), db: S
 def billing_status(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
     org = db.get(Organization, member.organization_id)
     return {"plan": org.plan, "status": org.billing_status, "workspace_limit": org.workspace_limit,
-           "keyword_limit": org.keyword_limit, **_plan_dict(org)}
+           "keyword_limit": org.keyword_limit, "standing_offer": promos.standing_for_org(db, org), **_plan_dict(org)}
 
 
 @app.get("/api/me")
@@ -2542,6 +2547,14 @@ def public_track(body: TrackBody, request: Request, db: Session = Depends(get_db
     return Response(status_code=204)
 
 
+@app.get("/api/public/standing-offer")
+def public_standing_offer(request: Request, db: Session = Depends(get_db)) -> dict:
+    """Is the standing first-purchase offer on, and for how much? Public, so the website and the sign-up page can say so."""
+    if not _promo_limiter.allow(_client_key(request)):
+        raise HTTPException(429, "Too many requests.")
+    return promos.standing_status(db)
+
+
 @app.get("/api/public/promo/{code}")
 def public_promo_preview(code: str, request: Request, plan: str = "growth", cycle: str = "annual", quantity: int = 1,
                          db: Session = Depends(get_db)) -> dict:
@@ -2616,6 +2629,48 @@ def _promo_dict(db: Session, p) -> dict:
             "valid_from": p.valid_from.isoformat() if p.valid_from else None,
             "valid_until": p.valid_until.isoformat() if p.valid_until else None,
             "max_redemptions": p.max_redemptions, "paid_redemptions": promos.redemptions(db, p)}
+
+
+class StandingBody(BaseModel):
+    enabled: bool
+    code: str = "FIRST15"
+    percent: int = 15
+
+
+def _standing_dict(db: Session) -> dict:
+    code = promos.standing_code(db)
+    promo = db.scalar(select(PromoCode).where(PromoCode.code == code)) if code else None
+    return {"enabled": bool(code), "code": code or "FIRST15", "percent": promo.percent if promo else 15, "live": promos.standing_status(db)["active"],
+            "redeemed": promos.redemptions(db, promo) if promo else 0}
+
+
+@app.get("/api/admin/standing-offer")
+def admin_get_standing_offer(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    return _standing_dict(db)
+
+
+@app.put("/api/admin/standing-offer")
+def admin_set_standing_offer(body: StandingBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """Switch the standing first-purchase offer on or off. Switching on creates the code if it does not exist (no end date, no limit), or
+    makes an existing code the standing offer; its dates, limit and on/off switch stay editable in the Offer codes table."""
+    _require_exempt(member, db)
+    if not body.enabled:
+        promos.set_standing_code(db, "", member.email)
+        return _standing_dict(db)
+    code = promos.normalise(body.code, limit=None)
+    if not promos.CODE_RE.match(code):
+        raise HTTPException(422, "A code needs 3 to 24 letters or numbers.")
+    if not 1 <= body.percent <= 90:
+        raise HTTPException(422, "The discount must be between 1 and 90 percent.")
+    promo = db.scalar(select(PromoCode).where(PromoCode.code == code))
+    if promo:
+        promo.percent, promo.active = body.percent, True
+    else:
+        db.add(PromoCode(code=code, percent=body.percent, platform="Standing offer", active=True))
+    db.commit()
+    promos.set_standing_code(db, code, member.email)
+    return _standing_dict(db)
 
 
 @app.get("/api/admin/promos")
