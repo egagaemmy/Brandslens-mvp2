@@ -13,7 +13,7 @@ from ..config import APP_URL
 from ..models import Workspace, Incident, OrgMember, PushSubscription
 from .classifier import classify_batch
 from .dedup import content_hash, find_near_duplicate
-from . import media_room
+from . import media_room, matching
 from .mailer import slack_alert, send_mention_alert_email, send_push_notification
 
 log = logging.getLogger("pipeline")
@@ -26,10 +26,10 @@ def _matching_keywords(ws: Workspace, text: str) -> list[str]:
     list means this mention doesn't survive the prefilter at all."""
     lower = text.lower()
     matched = []
-    if ws.name.lower() in lower:
+    if matching.contains(lower, ws.name):
         matched.append(ws.name)
     for kw in (ws.keywords or []):
-        if kw.lower() in lower:
+        if matching.contains(lower, kw):
             matched.append(kw)
     return matched
 
@@ -104,7 +104,8 @@ def _notify_workspace_members(db: Session, ws: Workspace, inc: Incident) -> None
 def ingest_candidates(db: Session, ws: Workspace, candidates: list[dict], source: str, found_historically: bool = False) -> dict:
     """candidates: [{"text","url","author","platform","posted_at"(datetime|None),"reach"}]"""
     survivors_with_keywords = [(c, _matching_keywords(ws, c["text"])) for c in candidates]
-    survivors_with_keywords = [(c, kws) for c, kws in survivors_with_keywords if kws]
+    # A candidate also survives when its source already matched it on the full text (the news index searches the article, not just the headline).
+    survivors_with_keywords = [(c, kws) for c, kws in survivors_with_keywords if kws or c.get("source_matched")]
     survivors = [c for c, _ in survivors_with_keywords]
     if not survivors:
         return {"candidates": len(candidates), "new": 0, "high": 0, "merged": 0}

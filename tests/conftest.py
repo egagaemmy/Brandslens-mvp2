@@ -40,6 +40,15 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def fresh_trial_rate_limits():
+    """The free-trial limiters also live in memory for the whole process. Every test file gets them empty, not only test_trial.py."""
+    from app import routes_trial
+    for limiter in (routes_trial._start_ip, routes_trial._start_email, routes_trial._verify_ip, routes_trial._request_ip):
+        limiter._hits.clear()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def no_rate_limit_leakage():
     """The in-memory limiters live for the whole process; reset them so tests stay independent."""
     from app import main

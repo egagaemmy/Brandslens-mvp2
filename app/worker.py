@@ -19,7 +19,7 @@ from .config import (CADENCE_NEWS, CADENCE_NAIRALAND, CADENCE_HACKERNEWS, CADENC
                      CADENCE_DOMAINS, CADENCE_TELEGRAM_FLUSH, CADENCE_X, CADENCE_SLA_SWEEP, CADENCE_SUBSCRIPTION_VERIFY,
                      CADENCE_EXPIRY_CHECK, TIMEZONE)
 from .models import Workspace
-from .services import pipeline, media_room, billing
+from .services import pipeline, media_room, billing, scan_health
 from .services.mailer import slack_alert
 from .collectors import (news_collector, nairaland_collector, hackernews_collector, reddit_collector,
                          youtube_collector, domain_collector, telegram_collector, x_collector)
@@ -54,12 +54,17 @@ def run_collector(name: str, collect_fn) -> None:
         workspaces = _each_workspace(db)
         for i, ws in enumerate(workspaces):
             try:
-                candidates = collect_fn(db, ws)
+                with scan_health.tracking() as health:        # collectors say here if they could not look, or are simply not connected
+                    candidates = collect_fn(db, ws)
+                summary = {}
                 if candidates:
                     summary = pipeline.ingest_candidates(db, ws, candidates, source=name)
                     log.info("%s / %s: %s", name, ws.name, summary)
+                if not health["skipped"]:                      # a source that is not connected leaves nothing behind
+                    scan_health.record(db, ws, name, candidates=len(candidates or []), new=summary.get("new", 0), high=summary.get("high", 0), problem=health["problem"])
             except Exception:  # noqa: BLE001
                 log.exception("%s failed for %s", name, ws.name)
+                scan_health.record(db, ws, name, problem="This check did not finish")
             if i < len(workspaces) - 1:
                 time.sleep(3)
     finally:

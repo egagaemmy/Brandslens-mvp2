@@ -8,6 +8,7 @@ from ..config import REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
 from ..models import Workspace
 from ..services.pipeline import search_terms
 
+from ..services import scan_health
 log = logging.getLogger("collector.reddit")
 _token_cache = {"token": None, "expires": 0}
 
@@ -28,12 +29,14 @@ def _get_token() -> str | None:
         return _token_cache["token"]
     except Exception:  # noqa: BLE001
         log.exception("Reddit auth failed")
+        scan_health.note_problem("Reddit could not be reached")
         return None
 
 def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     token = _get_token()
     if not token:
         log.info("Reddit not configured — skipping (set REDDIT_CLIENT_ID/SECRET)")
+        scan_health.note_skipped()
         return []
     terms = search_terms(ws)
     query = " OR ".join(f'"{t}"' for t in terms)
@@ -45,6 +48,7 @@ def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
         posts = r.json().get("data", {}).get("children", [])
     except Exception:  # noqa: BLE001
         log.exception("Reddit search failed for %s", ws.name)
+        scan_health.note_problem("Reddit could not be reached")
         return []
     out = []
     for p in posts:

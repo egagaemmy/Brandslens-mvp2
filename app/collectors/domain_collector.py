@@ -9,6 +9,7 @@ import httpx
 from ..config import WHOISXML_API_KEY
 from ..models import Workspace
 
+from ..services import scan_health
 log = logging.getLogger("collector.domains")
 
 def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
@@ -49,6 +50,7 @@ def _dnstwist(domain: str) -> list[dict]:
         results = dnstwist.run(domain=domain, registered=True, format="null") or []
     except Exception:  # noqa: BLE001
         log.exception("dnstwist failed for %s", domain)
+        scan_health.note_problem("The domain check could not run")
         return []
     out = []
     for r in results:
@@ -75,6 +77,7 @@ def _whoisxml_nrd(token: str) -> list[dict]:
         domains = r.json().get("domainsList", [])[:40]
     except Exception:  # noqa: BLE001
         log.exception("WhoisXML NRD failed for %s", token)
+        scan_health.note_problem("The domain check could not run")
         return []
     return [{"text": f"Newly registered domain contains brand token '{token}': {d}. Assess for phishing.",
             "url": f"http://{d}", "author": "whoisxml-nrd", "platform": "Domain Watch",

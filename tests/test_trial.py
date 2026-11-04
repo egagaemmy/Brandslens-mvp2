@@ -187,7 +187,7 @@ def test_verifying_creates_a_capped_professional_trial_that_ends_exactly_30_days
     row = db.scalar(select(TrialSignup))
     assert row.status == "active" and row.ends_at == org.trial_ends_at and row.organization_id == org.id and row.code_hash == ""
     ws = db.scalar(select(Workspace).where(Workspace.organization_id == org.id))
-    assert len(ws.keywords) == 5
+    assert ws.keywords == []              # no default keywords: the customer lists their own, up to the cap of five
     h = bearer(out["token"])
     assert client.get(f"/api/workspaces/{ws.id}", headers=h).status_code == 200
     me = client.get("/api/trial/me", headers=h).json()
@@ -235,10 +235,10 @@ def test_a_blocked_address_cannot_start_a_trial(client, db, mails):
     assert begin(client, email="x@bad-actor.com", company="Bad Actor").status_code == 403
 
 
-def test_the_starter_keywords_never_exceed_the_cap(client, db, mails):
+def test_a_new_trial_has_no_default_keywords_and_the_cap_is_still_the_limit(client, db, mails):
     open_trials(db, caps={"keywords": 3})
     start_trial(client, db, mails)
-    assert len(ws_of(db).keywords) == 3 and org_of(db, "ada@acme-foods.com").keyword_limit == 3
+    assert ws_of(db).keywords == [] and org_of(db, "ada@acme-foods.com").keyword_limit == 3
 
 
 def test_the_length_is_locked_when_a_trial_starts_and_a_later_change_only_affects_new_trials(client, db, mails):
@@ -407,7 +407,7 @@ def test_the_lead_list_filters_searches_and_counts(client, db, mails, admin):
     assert [r["email"] for r in client.get("/api/admin/trials?status=active", headers=admin).json()["rows"]] == ["ada@acme-foods.com"]
     assert [r["company"] for r in client.get("/api/admin/trials?q=OTHER", headers=admin).json()["rows"]] == ["Other Company"]
     row = client.get("/api/admin/trials?q=acme-foods", headers=admin).json()["rows"][0]
-    assert row["days_left"] == 30 and row["keywords"] == 5 and row["marketing_consent"] is True and row["billing_status"] == "trialing"
+    assert row["days_left"] == 30 and row["keywords"] == 0 and row["marketing_consent"] is True and row["billing_status"] == "trialing"
 
 
 def test_extending_a_running_trial_adds_days_to_its_end(client, db, mails, admin):

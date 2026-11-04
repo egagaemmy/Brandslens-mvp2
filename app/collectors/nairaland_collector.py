@@ -14,6 +14,7 @@ import httpx
 from ..models import Workspace
 from ..services.pipeline import search_terms
 
+from ..services import scan_health
 log = logging.getLogger("collector.nairaland")
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -41,6 +42,7 @@ def _search_one(term: str, seen: set[str]) -> list[dict]:
         r.raise_for_status()
     except Exception:  # noqa: BLE001
         log.exception("Nairaland fetch failed for %s", term)
+        scan_health.note_problem("Nairaland could not be reached")
         return []
     out = []
     for url, raw_title in LINK_RE.findall(r.text)[:20]:

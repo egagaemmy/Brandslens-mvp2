@@ -16,6 +16,7 @@ import httpx
 from ..models import Workspace
 from ..services.pipeline import search_terms
 
+from ..services import scan_health
 log = logging.getLogger("collector.hackernews")
 HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date"
 MAX_TERMS_PER_RUN = 5
@@ -39,6 +40,7 @@ def _search_one(term: str, seen: set[str], days_back: int | None = None) -> list
         hits = r.json().get("hits", [])
     except Exception:  # noqa: BLE001
         log.exception("Hacker News search failed for %r", term)
+        scan_health.note_problem("Hacker News could not be reached")
         return []
 
     out = []

@@ -30,6 +30,7 @@ from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber, PromoCode, TrackingTag, UtmLink, SignupAttribution,
                      PushSubscription, Announcement, now_utc, aware)
 from .services import pipeline, media_room, auth, billing, promos, tracking
+from .services import scan_health
 from .services.ratelimit import RateLimiter
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -449,12 +450,16 @@ def _run_full_scan(ws_id: str) -> None:
             run = ScanRun(workspace_id=ws.id, source=source)
             db.add(run); db.commit()
             try:
-                candidates = mod.collect(db, ws)
+                with scan_health.tracking() as health:
+                    candidates = mod.collect(db, ws)
                 summary = pipeline.ingest_candidates(db, ws, candidates, source=source)
                 run.finished_at = now_utc()
                 run.candidates, run.new_incidents, run.high_count = summary["candidates"], summary["new"], summary["high"]
+                if not health["skipped"]:
+                    scan_health.record(db, ws, source, candidates=summary["candidates"], new=summary["new"], high=summary["high"], problem=health["problem"])
             except Exception as e:  # noqa: BLE001
                 run.error = str(e)[:2000]; run.finished_at = now_utc()
+                scan_health.record(db, ws, source, problem="This check did not finish")
             db.commit()
     finally:
         db.close()
@@ -466,6 +471,14 @@ def trigger_scan(tasks: BackgroundTasks, ws: Workspace = Depends(owned_workspace
         return {"ok": True, "message": "Scan started across all configured sources"}
     tasks.add_task(_run_full_scan, ws.id)
     return {"ok": True, "message": "Scan started across all configured sources"}
+
+
+@app.get("/api/workspaces/{ws_id}/scan-status")
+def scan_status(ws: Workspace = Depends(owned_workspace), db: Session = Depends(get_db)) -> dict:
+    """When this workspace was last checked and which sources are being watched. A source that is not connected is never listed."""
+    if db.get(Organization, ws.organization_id).is_demo:      # the demo workspace is not really scanned, so it shows no scan line
+        return {"demo": True, "has_run": False, "last_scan_at": None, "watching": [], "retrying": []}
+    return {"demo": False, **scan_health.status_for(db, ws)}
 
 
 # Which sources genuinely honour a historical date range vs which ones
@@ -983,11 +996,15 @@ async def flutterwave_webhook(request: Request, db: Session = Depends(get_db)) -
         raise HTTPException(400, "Invalid signature")
 
 
-def _plan_dict(org: Organization) -> dict:
+def _plan_dict(org: Organization, db: Session | None = None) -> dict:
     from .services.auth import effective_plan, PLAN_WORKSPACE_LIMIT, PLAN_KEYWORD_LIMIT
+    from .services import trial as trial_svc
     eff = effective_plan(org)
+    ws_limit, kw_limit = PLAN_WORKSPACE_LIMIT[eff], PLAN_KEYWORD_LIMIT[eff]
+    if db is not None and trial_svc.is_trial(org):     # a free trial shows the caps it really has (the server enforces them), not the plan's
+        ws_limit, kw_limit = trial_svc.limit(db, org, "workspaces", ws_limit), trial_svc.limit(db, org, "keywords", kw_limit)
     return {"real_plan": org.plan, "effective_plan": eff, "is_admin_view_as": org.view_as_plan is not None,
-           "effective_workspace_limit": PLAN_WORKSPACE_LIMIT[eff], "effective_keyword_limit": PLAN_KEYWORD_LIMIT[eff],
+           "effective_workspace_limit": ws_limit, "effective_keyword_limit": kw_limit,
            "is_exempt": org.billing_status == "exempt"}
 
 
@@ -1005,14 +1022,14 @@ def view_as(body: ViewAsBody, member: OrgMember = Depends(current_member), db: S
         auth.set_view_as(db, org, body.plan)
     except AuthError as e:
         raise HTTPException(403, str(e))
-    return _plan_dict(org)
+    return _plan_dict(org, db)
 
 
 @app.get("/api/billing/status")
 def billing_status(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
     org = db.get(Organization, member.organization_id)
     return {"plan": org.plan, "status": org.billing_status, "workspace_limit": org.workspace_limit,
-           "keyword_limit": org.keyword_limit, "standing_offer": promos.standing_for_org(db, org), **_plan_dict(org)}
+           "keyword_limit": org.keyword_limit, "standing_offer": promos.standing_for_org(db, org), **_plan_dict(org, db)}
 
 
 @app.get("/api/me")
@@ -1022,7 +1039,7 @@ def get_me(member: OrgMember = Depends(current_member), db: Session = Depends(ge
     return {
         "member": _member_dict(member),
         "organization": {"id": org.id, "name": org.name, "plan": org.plan, "billing_status": org.billing_status,
-                         "workspace_limit": org.workspace_limit, "keyword_limit": org.keyword_limit, **_plan_dict(org)},
+                         "workspace_limit": org.workspace_limit, "keyword_limit": org.keyword_limit, **_plan_dict(org, db)},
         "workspaces": [{"id": w.id, "name": w.name, "sector": w.sector} for w in workspaces],
     }
 
@@ -1351,11 +1368,22 @@ def setup_backfill_rss_feeds(secret: str, db: Session = Depends(get_db)) -> dict
     updated = []
     workspaces = db.scalars(select(Workspace)).all()
     for ws in workspaces:
-        current = set(ws.rss_feeds or [])
-        missing = [f for f in auth.DEFAULT_RSS_FEEDS if f not in current]
-        if missing:
-            ws.rss_feeds = list(ws.rss_feeds or []) + missing
-            updated.append({"workspace": ws.name, "feeds_added": len(missing)})
+        before = list(ws.rss_feeds or [])
+        feeds, replaced, removed = [], 0, 0
+        for f in before:                                   # first, repair feeds that no longer work (swap for the new address, or drop)
+            if f in auth.RETIRED_RSS_FEEDS:
+                new = auth.RETIRED_RSS_FEEDS[f]
+                if new is None: removed += 1
+                else:
+                    replaced += 1
+                    if new not in feeds and new not in before: feeds.append(new)
+            else:
+                feeds.append(f)
+        missing = [f for f in auth.DEFAULT_RSS_FEEDS if f not in feeds]
+        feeds += missing
+        if feeds != before:
+            ws.rss_feeds = feeds
+            updated.append({"workspace": ws.name, "feeds_added": len(missing), "feeds_replaced": replaced, "feeds_removed": removed})
     db.commit()
     return {"ok": True, "workspaces_updated": updated,
            "message": f"Backfilled {len(updated)} workspace(s)." if updated else

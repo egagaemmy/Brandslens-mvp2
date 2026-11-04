@@ -8,14 +8,17 @@ import httpx
 from ..config import X_ENABLED, X_BEARER_TOKEN
 from ..models import Workspace
 
+from ..services import scan_health
 log = logging.getLogger("collector.x")
 SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
 
 def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     if not X_ENABLED:
+        scan_health.note_skipped()
         return []  # deliberately silent — this is an expected, budgeted-for gap at MVP stage
     if not X_BEARER_TOKEN:
         log.warning("X_ENABLED=true but X_BEARER_TOKEN missing")
+        scan_health.note_skipped()
         return []
     brand = f'"{ws.name}"' if " " in ws.name else ws.name
     terms = [f'"{t}"' for t in (ws.keywords or [])[:15]]
@@ -29,6 +32,7 @@ def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
         data = r.json()
     except Exception:  # noqa: BLE001
         log.exception("X search failed for %s", ws.name)
+        scan_health.note_problem("X could not be reached")
         return []
     users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
     out = []

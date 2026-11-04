@@ -262,8 +262,8 @@ def _step(db, key):
 
 
 def test_the_phrases_follow_the_real_limits_and_time_left():
-    assert trial.starter_phrase(5) == "five starter keywords" and trial.starter_phrase(3) == "three starter keywords" and trial.starter_phrase(1) == "one starter keyword"
-    assert trial.starter_phrase(12) == "five starter keywords"            # never promises more than the five that verify() really creates
+    assert trial.keywords_phrase(5) == "up to five keywords" and trial.keywords_phrase(3) == "up to three keywords" and trial.keywords_phrase(1) == "one keyword"
+    assert trial.keywords_phrase(12) == "up to 12 keywords"
     assert trial.limits_phrase(1, 5) == "one workspace and five keywords" and trial.limits_phrase(2, 12) == "two workspaces and 12 keywords"
     assert trial.days_phrase(1) == "1 day" and trial.days_phrase(16) == "16 days" and trial.days_phrase(-3) == "0 days"
 
@@ -273,7 +273,7 @@ def test_the_welcome_and_one_week_left_emails_state_the_real_limits(client, db, 
     row = _lead(db, "ada@acme-foods.com")
     _, welcome = trial.build_email(db, row, _step(db, "welcome"))
     _, week = trial.build_email(db, row, _step(db, "before_end_7"))
-    assert "five starter keywords" in welcome and "{{" not in welcome
+    assert "up to five keywords" in welcome and "starter" not in welcome and "{{" not in welcome
     assert "one workspace and five keywords" in week and "{{" not in week
 
 

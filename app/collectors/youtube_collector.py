@@ -7,11 +7,13 @@ from ..config import YOUTUBE_API_KEY
 from ..models import Workspace
 from ..services.pipeline import search_terms
 
+from ..services import scan_health
 log = logging.getLogger("collector.youtube")
 
 def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
     if not YOUTUBE_API_KEY:
         log.info("YouTube not configured — skipping (set YOUTUBE_API_KEY)")
+        scan_health.note_skipped()
         return []
     query = ws.youtube_query or " OR ".join(search_terms(ws))
     params = {"part": "snippet", "q": query, "type": "video", "order": "date",
@@ -25,6 +27,7 @@ def collect(db, ws: Workspace, days_back: int | None = None) -> list[dict]:
         items = r.json().get("items", [])
     except Exception:  # noqa: BLE001
         log.exception("YouTube search failed for %s", query)
+        scan_health.note_problem("YouTube could not be reached")
         return []
     out = []
     for it in items:

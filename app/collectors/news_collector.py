@@ -9,6 +9,7 @@ import feedparser
 from ..models import Workspace
 from ..services.pipeline import search_terms
 
+from ..services import scan_health
 log = logging.getLogger("collector.news")
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
@@ -35,18 +36,21 @@ def _gdelt(ws: Workspace, _attempt: int = 1, days_back: int | None = None) -> li
                 time.sleep(wait)
                 return _gdelt(ws, _attempt + 1, days_back=days_back)
             log.warning("GDELT still rate-limited for %s after 3 attempts — skipping this run", ws.name)
+            scan_health.note_problem("The news search was busy")
             return []
         r.raise_for_status()
         arts = r.json().get("articles", [])
     except Exception:  # noqa: BLE001
         log.exception("GDELT failed for %s", ws.name)
+        scan_health.note_problem("The news search could not be reached")
         return []
     out = []
     for a in arts:
         if not a.get("title"):
             continue
         out.append({"text": a["title"], "url": a.get("url", ""), "author": a.get("domain", ""),
-                    "platform": "News", "posted_at": _ts(a.get("seendate")), "reach": 0})
+                    "platform": "News", "posted_at": _ts(a.get("seendate")), "reach": 0,
+                    "source_matched": True})      # the news index found it by searching the article text for the phrase, so trust that even if the headline alone does not repeat it
     return out
 
 def _ts(s):

@@ -26,7 +26,7 @@ PLAN_WORKSPACE_LIMIT = {"standard": 1, "growth": 5, "professional": 10, "enterpr
 # change or get discontinued, so this list is worth spot-checking against
 # the live sites periodically rather than treated as permanently correct.
 DEFAULT_RSS_FEEDS = [
-    # Nigerian outlets (15)
+    # Nigerian outlets (16)
     "https://punchng.com/feed/",
     "https://www.vanguardngr.com/feed/",
     "https://guardian.ng/feed/",
@@ -40,20 +40,26 @@ DEFAULT_RSS_FEEDS = [
     "https://www.thecable.ng/feed",
     "https://dailypost.ng/feed/",
     "https://tribuneonlineng.com/feed/",
-    "http://saharareporters.com/feed",
+    "https://saharareporters.com/rss.xml",
     "https://thenationonlineng.net/feed/",
-    # International, with strong Africa coverage (10)
+    "https://www.channelstv.com/feed/",
+    # International, with strong Africa coverage (9)
     "http://feeds.bbci.co.uk/news/world/africa/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
     "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf",
     "https://www.africanews.com/feed/rss",
     "https://www.france24.com/en/africa/rss",
     "https://www.theguardian.com/world/africa/rss",
-    "https://www.cnbcafrica.com/feed/",
     "http://feeds.bbci.co.uk/news/world/rss.xml",
     "http://rss.cnn.com/rss/edition_africa.rss",
     "https://www.devex.com/rss/news",
 ]
+
+# Feeds that used to be on the default list and no longer work. The one-time backfill swaps or removes them in workspaces that still have them.
+RETIRED_RSS_FEEDS: dict[str, str | None] = {
+    "http://saharareporters.com/feed": "https://saharareporters.com/rss.xml",    # the outlet moved its feed
+    "https://www.cnbcafrica.com/feed/": None,                                     # discontinued, no replacement found
+}
 
 # Sensible starter threat categories — matching media_room.PLAYBOOKS exactly,
 # so a freshly created workspace's escalation contacts line up with how

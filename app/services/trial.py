@@ -397,10 +397,9 @@ def verify(db: Session, *, email: str, code: str, password: str, now: datetime |
     db.add(owner)
     db.flush()
     company = row.company
-    starter = [f"{company} scam", f"{company} fraud", f"fake {company}", f"impersonating {company}", f"{company} refund"][: c["keywords"]]
     ws = Workspace(organization_id=org.id, name=company, sector="", owner_email=email,
                    brand_tokens=[t.strip().lower() for t in company.split() if len(t.strip()) > 2] or [company.lower()],
-                   keywords=starter, rss_feeds=list(DEFAULT_RSS_FEEDS))
+                   keywords=[], rss_feeds=list(DEFAULT_RSS_FEEDS))   # no default keywords: the customer lists their own, up to the cap
     db.add(ws)
     db.flush()
     _seed_default_threat_categories(db, ws)
@@ -633,8 +632,8 @@ _SIGN = "<p>Pat from BrandsLens</p>"
 # result is ever claimed. The emails about the trial itself (welcome, 3 days, 1 day, ended) stay plain and clear, because they go to everyone.
 DEFAULT_STEPS = [
     _step("welcome", "Welcome (sent at once)", "transactional", "after_start", 0, "Your BrandsLens trial is live",
-          "<p>Hi {{first_name}},</p><p>Pat here, from BrandsLens. Your trial is live and it runs until <b>{{ends_on}}</b>. We've set up a real workspace for {{company}}, with {{starter_phrase}} already watching the web for you.</p>"
-          "<p>Here's what I'd do first: open your dashboard and see what has come in. Every mention is scored HIGH, MEDIUM or WATCH, and that scoring is the heart of BrandsLens. It tells you what is serious before you have read a single post.</p>" + _CTA +
+          "<p>Hi {{first_name}},</p><p>Pat here, from BrandsLens. Your trial is live and it runs until <b>{{ends_on}}</b>. We've set up a real workspace for {{company}}, and it's yours to point at whatever matters to you.</p>"
+          "<p>Here's what I'd do first: open Settings and add the names people use for your brand and products. You can list {{keywords_phrase}}, and BrandsLens starts watching as soon as you save them. Then open your dashboard and see what has come in. Every mention is scored HIGH, MEDIUM or WATCH, and that scoring is the heart of BrandsLens. It tells you what is serious before you have read a single post.</p>" + _CTA +
           "<p>Reply to this email any time and a real person will help.</p>" + _SIGN),
     _step("day1_setup", "Day 1: set up", "marketing", "after_start", 1, "It's 2am and someone is talking about your brand",
           "<p>Hi {{first_name}},</p><p>Picture Mara. She leads communications for a growing food company. It's 2am, and a post claiming her brand is handing out fake discount vouchers has started to spread. Her phone is silent. Her team is asleep. Nobody knows yet.</p>"
@@ -756,9 +755,15 @@ def _count(n: int, noun: str) -> str:
     return f"{_WORDS.get(n, str(n))} {noun}{'' if n == 1 else 's'}"
 
 
+def keywords_phrase(keyword_cap: int) -> str:
+    """What the welcome email says the customer can list: 'up to five keywords' (or 'one keyword'). It is the trial's real cap."""
+    n = max(1, int(keyword_cap))
+    return "one keyword" if n == 1 else f"up to {_WORDS.get(n, str(n))} keywords"
+
+
 def starter_phrase(keyword_cap: int) -> str:
-    """What the welcome email says the new workspace starts with. It matches what verify() really creates (at most five)."""
-    return _count(max(1, min(5, int(keyword_cap))), "starter keyword")
+    """Kept only so a welcome email saved in Super Admin before this change still renders. A trial starts with no keywords at all."""
+    return "your keywords"
 
 
 def limits_phrase(workspaces: int, keywords: int) -> str:
@@ -782,7 +787,7 @@ def _vars(db: Session, row: TrialSignup) -> dict:
     caps = get_settings(db).get("caps") or DEFAULT_CAPS
     return {"first_name": html.escape((row.name or "").split(" ")[0] or "there"), "company": html.escape(row.company or "your company"),
             "ends_on": ends.strftime("%d %B %Y") if ends else "", "days_left": str(days_left(row.ends_at)), "app_url": APP_URL,
-            "days_left_phrase": days_phrase(days_left(row.ends_at)), "starter_phrase": starter_phrase(caps.get("keywords", 5)),
+            "days_left_phrase": days_phrase(days_left(row.ends_at)), "starter_phrase": starter_phrase(caps.get("keywords", 5)), "keywords_phrase": keywords_phrase(caps.get("keywords", 5)),
             "limits_phrase": limits_phrase(caps.get("workspaces", 1), caps.get("keywords", 5)),
             "upgrade_url": f"{APP_URL}/billing" + (f"?promo={code}" if code else ""), "offer_line": offer,
             "unsubscribe_url": f"{PUBLIC_API_URL}/api/public/trial/unsubscribe?token={row.unsub_token}"}
