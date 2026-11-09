@@ -9,6 +9,7 @@ file is the fix.
 from __future__ import annotations
 import json
 import logging
+import re
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 import httpx
 import base64
@@ -31,6 +32,7 @@ from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      PushSubscription, Announcement, now_utc, aware)
 from .services import pipeline, media_room, auth, billing, promos, tracking
 from .services import scan_health
+from .services.settings import get_setting, set_setting
 from .services.ratelimit import RateLimiter
 from .services.auth import AuthError
 from .services.billing import BillingNotConfigured
@@ -2699,6 +2701,73 @@ def admin_set_standing_offer(body: StandingBody, member: OrgMember = Depends(act
     db.commit()
     promos.set_standing_code(db, code, member.email)
     return _standing_dict(db)
+
+
+# ---------------------------------------------------------------- directory badges (Submitator)
+# The strip of directory badges on the marketing homepage. The website reads this switch (publicly) and Super Admin changes it, so turning
+# the strip off, or pointing it at another project, needs no redeploy. The project ID is public by design (it is already in the link of the
+# Featured on Submitator badge), so nothing secret is stored or returned here.
+DEFAULT_BADGES_PROJECT = "cc9145d4-1a73-4e81-bbe9-0183bc1c3bc5"   # keep equal to DEFAULT_BADGE_PROJECT in the website's lib/badges.ts
+_BADGE_PROJECT_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+class BadgesBody(BaseModel):
+    enabled: bool = True
+    project: str = ""
+
+
+def _badges_dict(db: Session) -> dict:
+    stored = str(get_setting(db, "badges:project", "") or "").strip().lower()
+    return {"enabled": get_setting(db, "badges:enabled", True) is not False,
+            "project": stored if _BADGE_PROJECT_RE.match(stored) else DEFAULT_BADGES_PROJECT,
+            "default_project": DEFAULT_BADGES_PROJECT, "site_url": MARKETING_URL.rstrip("/")}
+
+
+@app.get("/api/public/badges-config")
+def public_badges_config(db: Session = Depends(get_db)) -> dict:
+    """What the marketing homepage needs to know: is the badge strip shown, and for which project. Nothing else is returned."""
+    d = _badges_dict(db)
+    return {"enabled": d["enabled"], "project": d["project"]}
+
+
+@app.get("/api/admin/badges")
+def admin_get_badges(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    return _badges_dict(db)
+
+
+@app.put("/api/admin/badges")
+def admin_set_badges(body: BadgesBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """Show or hide the strip, and choose the project. A blank project means the default one."""
+    _require_exempt(member, db)
+    project = body.project.strip().lower()
+    if project and not _BADGE_PROJECT_RE.match(project):
+        raise HTTPException(422, "That does not look like a project ID. It is 36 characters: letters, numbers and dashes, like the one shown in Submitator.")
+    set_setting(db, "badges:enabled", bool(body.enabled), member.email)
+    set_setting(db, "badges:project", project, member.email)
+    return _badges_dict(db)
+
+
+@app.post("/api/admin/badges/check")
+def admin_check_badges(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """The same check Submitator runs: fetch the homepage the way a directory does and look for the badge marker in the HTML the server sends."""
+    _require_exempt(member, db)
+    d = _badges_dict(db)
+    url = d["site_url"] + "/"
+    result = {"ok": False, "found": 0, "status": None, "url": url, "project": d["project"]}
+    try:
+        r = httpx.get(url, follow_redirects=True, timeout=15, headers={"User-Agent": "BrandsLens-badge-check/1.0"})
+    except Exception:  # noqa: BLE001
+        return {**result, "message": "The check could not reach your website just now. Try again in a minute."}
+    result["status"] = r.status_code
+    if r.status_code != 200:
+        return {**result, "message": f"Your website answered with status {r.status_code}, so the check could not read the homepage."}
+    found = len(re.findall(r'data-sbm-ref="?' + re.escape(d["project"]), r.text))
+    if found:
+        return {**result, "ok": True, "found": found, "message": f"Your badges are in the HTML your website sends ({found} found). Now press Verify Badge Handling in Submitator."}
+    if not d["enabled"]:
+        return {**result, "message": "The strip is switched off here, so no badges are in the page. Switch it on, wait a minute, then check again."}
+    return {**result, "message": "No badges in your homepage HTML yet. The website must be deployed once with the badge package. If you have just deployed, wait a minute (the page refreshes every 60 seconds) and check again."}
 
 
 @app.get("/api/admin/promos")
