@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
+from urllib.parse import urlparse
+from html import escape as _html_escape
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 import httpx
 import base64
@@ -32,6 +35,7 @@ from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      PushSubscription, Announcement, now_utc, aware)
 from .services import pipeline, media_room, auth, billing, promos, tracking
 from .services import scan_health
+from .blog_seo_posts import SEO_POSTS
 from .services.settings import get_setting, set_setting
 from .services.ratelimit import RateLimiter
 from .services.auth import AuthError
@@ -1392,6 +1396,27 @@ def setup_backfill_rss_feeds(secret: str, db: Session = Depends(get_db)) -> dict
                      "Every workspace already had the full default feed list — nothing needed adding."}
 
 
+@app.get("/api/setup/seed-blog-seo")
+def setup_seed_blog_seo(secret: str, db: Session = Depends(get_db)) -> dict:
+    """One-time route that publishes the four SEO blog posts (app/blog_seo_posts.py). Idempotent: a post whose slug already exists is skipped,
+    so calling it again changes nothing. Protected by ADMIN_SETUP_SECRET, like the other setup routes."""
+    if not ADMIN_SETUP_SECRET or secret != ADMIN_SETUP_SECRET:
+        raise HTTPException(403, "Invalid or missing setup secret.")
+    created, skipped = [], []
+    for p in SEO_POSTS:
+        slug = _slugify(p["title"])
+        if db.scalar(select(BlogPost).where(BlogPost.slug == slug)):
+            skipped.append(slug)
+            continue
+        db.add(BlogPost(slug=slug, title=p["title"], excerpt=p["excerpt"], body_html=p["body_html"], meta_description=p["meta_description"],
+                        author_name="BrandsLens Team", status="published", published_at=now_utc()))
+        created.append(slug)
+    db.commit()
+    return {"ok": True, "created": [{"slug": s, "url": f"{BLOG_URL}/blog/{s}"} for s in created], "already_published": skipped,
+            "sitemap": f"{BLOG_URL}/sitemap.xml",
+            "message": f"{len(created)} post(s) published." if created else "All four posts were already published, nothing to do."}
+
+
 @app.get("/api/setup/seed-blog")
 def setup_seed_blog(secret: str, db: Session = Depends(get_db)) -> dict:
     """Temporary, one-time-use route — publishes the four launch blog posts
@@ -1679,20 +1704,26 @@ def public_legal(doc: str, response: Response, db: Session = Depends(get_db)) ->
 # in-app editor.
 # ==================================================================
 def _blog_page_wrapper(title: str, meta_description: str, canonical_path: str, body: str,
-                       og_image: str = "") -> str:
-    og_image_tag = f'<meta property="og:image" content="{og_image}">' if og_image else ""
+                       og_image: str = "", extra_head: str = "", robots: str = "index,follow,max-image-preview:large") -> str:
+    # Everything that goes into the <head> is escaped, so a quote or angle bracket in a title or description can never break the page.
+    t, d, c = _html_escape(title), _html_escape(meta_description), _html_escape(canonical_path)
+    og_image_tag = f'<meta property="og:image" content="{_html_escape(og_image)}">' if og_image else ""
     home_link = FRONTEND_ORIGIN if FRONTEND_ORIGIN != "*" else "https://brandslens.com"
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title}</title>
-<meta name="description" content="{meta_description}">
-<link rel="canonical" href="{BLOG_URL}{canonical_path}">
+<title>{t}</title>
+<meta name="description" content="{d}">
+<meta name="robots" content="{robots}">
+<link rel="canonical" href="{BLOG_URL}{c}">
 {ICON_LINKS}
 <meta property="og:type" content="article">
-<meta property="og:title" content="{title}">
-<meta property="og:description" content="{meta_description}">
-<meta property="og:url" content="{BLOG_URL}{canonical_path}">
+<meta property="og:site_name" content="BrandsLens">
+<meta property="og:title" content="{t}">
+<meta property="og:description" content="{d}">
+<meta property="og:url" content="{BLOG_URL}{c}">
+<meta name="twitter:card" content="summary">
 {og_image_tag}
+{extra_head}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -1748,8 +1779,8 @@ def blog_listing(db: Session = Depends(get_db)) -> str:
         body = "<h1>The BrandsLens Blog</h1><p>New posts are on their way.</p>"
     else:
         cards = "".join(f"""<a class="post-card" href="/blog/{p.slug}">
-            <div class="meta">{p.published_at.strftime('%d %B %Y') if p.published_at else ''} · {p.author_name}</div>
-            <h2>{p.title}</h2><p>{p.excerpt}</p></a>""" for p in posts)
+            <div class="meta">{p.published_at.strftime('%d %B %Y') if p.published_at else ''} · {_html_escape(p.author_name)}</div>
+            <h2>{_html_escape(p.title)}</h2><p>{_html_escape(p.excerpt)}</p></a>""" for p in posts)
         body = f"<h1>The BrandsLens Blog</h1><p style='color:#64748B;margin-bottom:32px'>Media monitoring, brand reputation, and fraud prevention — for teams protecting what they've built.</p>{cards}"
     return _blog_page_wrapper("The BrandsLens Blog — Media Monitoring & Brand Reputation Insights",
                               "Practical guidance on media monitoring, brand reputation, and fraud prevention for teams operating in African markets.",
@@ -1762,13 +1793,13 @@ def blog_post(slug: str, db: Session = Depends(get_db)) -> str:
     if not post:
         return _blog_page_wrapper("Post not found — BrandsLens Blog", "This post isn't available.", f"/blog/{slug}",
                                   "<h1>Post not found</h1><p>This post may have been unpublished or the link is incorrect. <a href='/blog'>Back to the blog</a>.</p>")
-    video_embed = f'<iframe video-embed src="{post.video_url}" allowfullscreen></iframe>' if post.video_url else ""
-    cover = f'<img class="cover" src="{post.cover_image}" alt="{post.title}">' if post.cover_image else ""
+    video_embed = f'<iframe video-embed src="{_html_escape(post.video_url)}" allowfullscreen></iframe>' if post.video_url else ""
+    cover = f'<img class="cover" src="{_html_escape(post.cover_image)}" alt="{_html_escape(post.title)}">' if post.cover_image else ""
     from urllib.parse import quote
     share_url = quote(f"{BLOG_URL}/blog/{post.slug}", safe="")
     share_title = quote(post.title)
-    body = f"""<h1>{post.title}</h1>
-    <div class="meta">{post.published_at.strftime('%d %B %Y') if post.published_at else ''} · {post.author_name}</div>
+    body = f"""<h1>{_html_escape(post.title)}</h1>
+    <div class="meta">{post.published_at.strftime('%d %B %Y') if post.published_at else ''} · {_html_escape(post.author_name)}</div>
     {cover}{video_embed}
     <div class="body-content">{post.body_html}</div>
     <div class="share-row">
@@ -1776,8 +1807,48 @@ def blog_post(slug: str, db: Session = Depends(get_db)) -> str:
       <a href="https://twitter.com/intent/tweet?url={share_url}&text={share_title}" target="_blank" rel="noopener">Share on X</a>
       <a href="https://www.facebook.com/sharer/sharer.php?u={share_url}" target="_blank" rel="noopener">Share on Facebook</a>
     </div>"""
-    return _blog_page_wrapper(f"{post.title} — BrandsLens Blog", post.meta_description or post.excerpt,
-                              f"/blog/{post.slug}", body, og_image=post.cover_image)
+    return _blog_page_wrapper(f"{post.title} | BrandsLens", post.meta_description or post.excerpt,
+                              f"/blog/{post.slug}", body, og_image=post.cover_image, extra_head=_blog_json_ld(post))
+
+
+def _blog_json_ld(post: BlogPost) -> str:
+    """Structured data (schema.org BlogPosting) so search engines know this is an article, who published it and when."""
+    from datetime import timezone
+
+    def iso(dt):
+        return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat() if dt else None
+    url = f"{BLOG_URL}/blog/{post.slug}"
+    data = {"@context": "https://schema.org", "@type": "BlogPosting", "headline": post.title, "description": post.meta_description or post.excerpt,
+            "url": url, "mainEntityOfPage": {"@type": "WebPage", "@id": url},
+            "author": {"@type": "Organization", "name": post.author_name or "BrandsLens Team"},
+            "publisher": {"@type": "Organization", "name": "BrandsLens", "url": "https://www.brandslens.com"}}
+    if iso(post.published_at):
+        data["datePublished"] = iso(post.published_at)
+    if iso(post.updated_at or post.published_at):
+        data["dateModified"] = iso(post.updated_at or post.published_at)
+    if post.cover_image and post.cover_image.startswith("http"):
+        data["image"] = post.cover_image
+    # < > & are written as unicode escapes (still valid JSON, read back unchanged), so no text in a post can ever close the script tag or look like markup.
+    safe = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    return '<script type="application/ld+json">' + safe + "</script>"
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def blog_sitemap(db: Session = Depends(get_db)) -> Response:
+    """Lists the blog and every published post, so search engines can find each one and see when it last changed."""
+    posts = db.scalars(select(BlogPost).where(BlogPost.status == "published").order_by(BlogPost.published_at.desc())).all()
+    urls = [f"<url><loc>{_html_escape(BLOG_URL)}/blog</loc></url>"]
+    for p in posts:
+        stamp = (p.updated_at or p.published_at)
+        lastmod = f"<lastmod>{stamp.date().isoformat()}</lastmod>" if stamp else ""
+        urls.append(f"<url><loc>{_html_escape(BLOG_URL)}/blog/{_html_escape(p.slug)}</loc>{lastmod}</url>")
+    xml = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + "".join(urls) + "</urlset>"
+    return Response(content=xml, media_type="application/xml")
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def blog_robots() -> Response:
+    return Response(content=f"User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: {BLOG_URL}/sitemap.xml\n", media_type="text/plain")
 
 
 def _slugify(title: str) -> str:
@@ -2716,18 +2787,92 @@ class BadgesBody(BaseModel):
     project: str = ""
 
 
+# ---- Other directory badges: any directory's badge, added by hand in Super Admin (the Submitator strip is separate and unchanged).
+# Each is a plain link plus an image, written into the page's HTML as ordinary markup. Only https addresses are accepted, never a script.
+_CUSTOM_BADGES_KEY = "badges:custom"
+_MAX_CUSTOM_BADGES = 24
+_BAD_URL_CHARS = set(' <>"\'\\\n\r\t`')
+
+
+class CustomBadgeIn(BaseModel):
+    id: str = ""
+    name: str = ""
+    href: str = ""
+    image: str = ""
+    alt: str = ""
+    width: int | None = None
+    height: int | None = None
+    enabled: bool = True
+
+
+class CustomBadgesBody(BaseModel):
+    items: list[CustomBadgeIn] = []
+
+
+def _https_url(value: str) -> str | None:
+    """The address if it is a plain https web address (no credentials, no spaces or quotes, not too long), otherwise None."""
+    v = (value or "").strip()
+    if not v or len(v) > 500 or any(c in _BAD_URL_CHARS for c in v):
+        return None
+    try:
+        u = urlparse(v)
+        host = u.hostname or ""
+    except ValueError:
+        return None
+    if u.scheme != "https" or "." not in host or u.username or u.password:
+        return None
+    return v
+
+
+def _size(value: int | None) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 16 <= value <= 600 else None
+
+
+def _clean_custom_badge(raw: CustomBadgeIn, strict: bool) -> dict | None:
+    """One badge made safe. strict=True (saving) refuses a bad one with a reason; strict=False (reading back) just skips it."""
+    name = (raw.name or "").strip()
+    href, image = _https_url(raw.href), _https_url(raw.image)
+    problem = ("Give the badge a name (up to 60 characters)." if not name or len(name) > 60 else
+               f"{name}: the link must be a full https address, like https://www.saashub.com/brandslens." if not href else
+               f"{name}: the badge image must be a full https address ending in the image file, like https://example.com/badge.png." if not image else
+               f"{name}: the width and height, if given, must be between 16 and 600." if (raw.width is not None and _size(raw.width) is None) or (raw.height is not None and _size(raw.height) is None) else
+               f"{name}: the alt text can be up to 120 characters." if len((raw.alt or "").strip()) > 120 else "")
+    if problem:
+        if strict:
+            raise HTTPException(422, problem)
+        return None
+    bid = raw.id.strip().lower()
+    return {"id": bid if re.fullmatch(r"[0-9a-f]{12}", bid) else uuid.uuid4().hex[:12], "name": name, "href": href, "image": image,
+            "alt": (raw.alt or "").strip() or f"Listed on {name}", "width": _size(raw.width), "height": _size(raw.height), "enabled": bool(raw.enabled)}
+
+
+def _custom_badges(db: Session) -> list[dict]:
+    """The saved list, re-checked on the way out so nothing odd that was ever stored can reach the public page."""
+    stored = get_setting(db, _CUSTOM_BADGES_KEY, [])
+    out = []
+    for item in stored if isinstance(stored, list) else []:
+        try:
+            clean = _clean_custom_badge(CustomBadgeIn(**item), strict=False)
+        except Exception:  # noqa: BLE001
+            clean = None
+        if clean:
+            out.append(clean)
+    return out[:_MAX_CUSTOM_BADGES]
+
+
 def _badges_dict(db: Session) -> dict:
     stored = str(get_setting(db, "badges:project", "") or "").strip().lower()
     return {"enabled": get_setting(db, "badges:enabled", True) is not False,
             "project": stored if _BADGE_PROJECT_RE.match(stored) else DEFAULT_BADGES_PROJECT,
-            "default_project": DEFAULT_BADGES_PROJECT, "site_url": MARKETING_URL.rstrip("/")}
+            "default_project": DEFAULT_BADGES_PROJECT, "site_url": MARKETING_URL.rstrip("/"), "custom": _custom_badges(db)}
 
 
 @app.get("/api/public/badges-config")
 def public_badges_config(db: Session = Depends(get_db)) -> dict:
     """What the marketing homepage needs to know: is the badge strip shown, and for which project. Nothing else is returned."""
     d = _badges_dict(db)
-    return {"enabled": d["enabled"], "project": d["project"]}
+    shown = [{k: b[k] for k in ("name", "href", "image", "alt", "width", "height")} for b in d["custom"] if b["enabled"]]
+    return {"enabled": d["enabled"], "project": d["project"], "custom": shown}
 
 
 @app.get("/api/admin/badges")
@@ -2748,13 +2893,30 @@ def admin_set_badges(body: BadgesBody, member: OrgMember = Depends(active_member
     return _badges_dict(db)
 
 
+@app.put("/api/admin/badges/custom")
+def admin_set_custom_badges(body: CustomBadgesBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    """Replace the list of other directory badges. Every one is checked; one bad entry refuses the whole save with the reason."""
+    _require_exempt(member, db)
+    if len(body.items) > _MAX_CUSTOM_BADGES:
+        raise HTTPException(422, f"You can add up to {_MAX_CUSTOM_BADGES} directory badges.")
+    clean, seen = [], set()
+    for raw in body.items:
+        c = _clean_custom_badge(raw, strict=True)
+        while c["id"] in seen:
+            c["id"] = uuid.uuid4().hex[:12]
+        seen.add(c["id"])
+        clean.append(c)
+    set_setting(db, _CUSTOM_BADGES_KEY, clean, member.email)
+    return {"custom": _custom_badges(db)}
+
+
 @app.post("/api/admin/badges/check")
 def admin_check_badges(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     """The same check Submitator runs: fetch the homepage the way a directory does and look for the badge marker in the HTML the server sends."""
     _require_exempt(member, db)
     d = _badges_dict(db)
     url = d["site_url"] + "/"
-    result = {"ok": False, "found": 0, "status": None, "url": url, "project": d["project"]}
+    result = {"ok": False, "found": 0, "status": None, "url": url, "project": d["project"], "custom": []}
     try:
         r = httpx.get(url, follow_redirects=True, timeout=15, headers={"User-Agent": "BrandsLens-badge-check/1.0"})
     except Exception:  # noqa: BLE001
@@ -2763,6 +2925,8 @@ def admin_check_badges(member: OrgMember = Depends(active_member), db: Session =
     if r.status_code != 200:
         return {**result, "message": f"Your website answered with status {r.status_code}, so the check could not read the homepage."}
     found = len(re.findall(r'data-sbm-ref="?' + re.escape(d["project"]), r.text))
+    # each other badge: is its link in the HTML the server sends? (the same thing the directory itself looks for)
+    result["custom"] = [{"name": b["name"], "found": b["href"] in r.text or _html_escape(b["href"]) in r.text} for b in d["custom"] if b["enabled"]]
     if found:
         return {**result, "ok": True, "found": found, "message": f"Your badges are in the HTML your website sends ({found} found). Now press Verify Badge Handling in Submitator."}
     if not d["enabled"]:
