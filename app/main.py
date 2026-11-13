@@ -31,7 +31,7 @@ from .deps import current_member, active_member, require_role, owned_workspace
 from .branding import BRAND
 from .models import (Organization, OrgMember, Workspace, Incident, ScanRun,
                      MediaRoomCase, MediaRoomAudit, Competitor, CompetitorMention,
-                     EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber, PromoCode, TrackingTag, UtmLink, SignupAttribution,
+                     EscalationContact, EscalationLog, ThreatCategory, PendingSignup, BlogPost, NewsletterSubscriber, PromoCode, TrackingTag, TrackingConversion, UtmLink, SignupAttribution,
                      PushSubscription, Announcement, now_utc, aware)
 from .services import pipeline, media_room, auth, billing, promos, tracking
 from .services import scan_health
@@ -3052,14 +3052,19 @@ class TagPatch(BaseModel):
 
 
 def _providers_for_ui() -> list[dict]:
-    return [{"provider": k, "name": v["name"], "example": v["example"], "where": v["where"], "event_keys": sorted(v["events"].keys())} for k, v in tracking.PROVIDERS.items()]
+    out = []
+    for k, v in tracking.PROVIDERS.items():
+        c = tracking.CONVERSIONS.get(k)
+        out.append({"provider": k, "name": v["name"], "example": v["example"], "where": v["where"], "event_keys": sorted(v["events"].keys()),
+                    "conversion": {"what": c["what"], "example": c["example"], "where": c["where"], "needs_prefix": c.get("needs_prefix", "")} if c else None})
+    return out
 
 
 @app.get("/api/admin/tracking/tags")
 def admin_list_tags(member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
     _require_exempt(member, db)
     rows = db.scalars(select(TrackingTag).order_by(TrackingTag.created_at)).all()
-    return {"tags": [tracking.tag_dict(t) for t in rows], "providers": _providers_for_ui()}
+    return {"tags": [tracking.tag_dict(t, db) for t in rows], "providers": _providers_for_ui(), "moments": tracking.MOMENTS}
 
 
 @app.post("/api/admin/tracking/tags")
@@ -3078,7 +3083,7 @@ def admin_create_tag(body: TagBody, member: OrgMember = Depends(active_member), 
     db.add(t)
     db.commit()
     log.info("Tracking tag added: %s %s (%s) by %s", t.provider, t.tag_id, t.scope, member.email)
-    return tracking.tag_dict(t)
+    return tracking.tag_dict(t, db)
 
 
 @app.patch("/api/admin/tracking/tags/{tag_pk}")
@@ -3106,7 +3111,7 @@ def admin_update_tag(tag_pk: str, body: TagPatch, member: OrgMember = Depends(ac
     t.updated_at, t.updated_by = now_utc(), member.email
     db.commit()
     log.info("Tracking tag changed: %s %s enabled=%s by %s", t.provider, t.tag_id, t.enabled, member.email)
-    return tracking.tag_dict(t)
+    return tracking.tag_dict(t, db)
 
 
 @app.delete("/api/admin/tracking/tags/{tag_pk}")
@@ -3115,10 +3120,83 @@ def admin_delete_tag(tag_pk: str, member: OrgMember = Depends(active_member), db
     t = db.get(TrackingTag, tag_pk)
     if not t:
         raise HTTPException(404, "Tag not found.")
+    for c in tracking.conversions_of(db, t.id):
+        db.delete(c)
     db.delete(t)
     db.commit()
     log.info("Tracking tag removed: %s %s by %s", t.provider, t.tag_id, member.email)
     return {"deleted": True}
+
+
+# Conversions: "when this happens, report that". Added from Super Admin, live within a minute, no deployment.
+class ConversionBody(BaseModel):
+    name: str = ""
+    trigger: str
+    value: str
+    enabled: bool = True
+
+
+class ConversionPatch(BaseModel):
+    name: str | None = None
+    trigger: str | None = None
+    value: str | None = None
+    enabled: bool | None = None
+
+
+@app.post("/api/admin/tracking/tags/{tag_pk}/conversions")
+def admin_add_conversion(tag_pk: str, body: ConversionBody, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    t = db.get(TrackingTag, tag_pk)
+    if not t:
+        raise HTTPException(404, "Tag not found.")
+    try:
+        trig, val = tracking.validate_conversion(t, body.trigger, body.value)
+    except tracking.TrackingError as e:
+        raise HTTPException(422, str(e))
+    existing = tracking.conversions_of(db, t.id)
+    if any(c.trigger == trig and c.value == val for c in existing):
+        raise HTTPException(409, "That conversion is already on this tag.")
+    if len(existing) >= tracking.MAX_CONVERSIONS_PER_TAG:
+        raise HTTPException(422, f"A tag can have up to {tracking.MAX_CONVERSIONS_PER_TAG} conversions. Remove one first.")
+    c = TrackingConversion(tag_pk=t.id, name=body.name.strip()[:80], trigger=trig, value=val, enabled=body.enabled, updated_by=member.email)
+    db.add(c)
+    db.commit()
+    log.info("Tracking conversion added: %s %s on %s -> %s by %s", t.provider, t.tag_id, trig, val, member.email)
+    return tracking.tag_dict(t, db)
+
+
+@app.patch("/api/admin/tracking/conversions/{conv_pk}")
+def admin_update_conversion(conv_pk: str, body: ConversionPatch, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    c = db.get(TrackingConversion, conv_pk)
+    t = db.get(TrackingTag, c.tag_pk) if c else None
+    if not c or not t:
+        raise HTTPException(404, "Conversion not found.")
+    data = body.model_dump(exclude_unset=True)
+    if "trigger" in data or "value" in data:
+        try:
+            c.trigger, c.value = tracking.validate_conversion(t, data.get("trigger") or c.trigger, data.get("value") or c.value)
+        except tracking.TrackingError as e:
+            raise HTTPException(422, str(e))
+    if data.get("name") is not None:
+        c.name = data["name"].strip()[:80]
+    if data.get("enabled") is not None:
+        c.enabled = data["enabled"]
+    c.updated_at, c.updated_by = now_utc(), member.email
+    db.commit()
+    return tracking.tag_dict(t, db)
+
+
+@app.delete("/api/admin/tracking/conversions/{conv_pk}")
+def admin_delete_conversion(conv_pk: str, member: OrgMember = Depends(active_member), db: Session = Depends(get_db)) -> dict:
+    _require_exempt(member, db)
+    c = db.get(TrackingConversion, conv_pk)
+    if not c:
+        raise HTTPException(404, "Conversion not found.")
+    t = db.get(TrackingTag, c.tag_pk)
+    db.delete(c)
+    db.commit()
+    return tracking.tag_dict(t, db) if t else {"deleted": True}
 
 
 class UtmBody(BaseModel):

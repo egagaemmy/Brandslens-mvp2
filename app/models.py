@@ -678,6 +678,24 @@ class TrackingTag(Base):
     updated_by: Mapped[str] = mapped_column(String(320), default="")
 
 
+class TrackingConversion(Base):
+    """One conversion on a tag: "when THIS happens, report THAT to the platform". Added, changed and removed from Super Admin with no
+    deployment. `trigger` is either a moment the app reports (trial_signup, purchase, login, ...) or a page, written page:/path (a trailing *
+    matches everything under it). `value` is the platform's own conversion reference (a Google Ads conversion label, a LinkedIn conversion ID,
+    an X event ID, a Meta or TikTok event name), checked against that platform's format. A new table, so it is created automatically at start up."""
+    __tablename__ = "tracking_conversions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tag_pk: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(80), default="")
+    trigger: Mapped[str] = mapped_column(String(120))
+    value: Mapped[str] = mapped_column(String(60))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_by: Mapped[str] = mapped_column(String(320), default="")
+
+
 class UtmLink(Base):
     """A saved campaign link from the UTM builder, so the team shares one list of every tracking link in use."""
     __tablename__ = "utm_links"

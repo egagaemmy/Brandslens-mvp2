@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from app.models import TrackingTag
+from app.models import TrackingConversion, TrackingTag
 from app.services import tracking
 from tests.helpers import bearer, make_admin, make_customer
 
@@ -126,7 +126,7 @@ def test_the_marketing_site_is_told_only_about_enabled_tags_meant_for_it(client,
 def test_the_public_list_carries_no_labels_no_emails_no_timestamps(client, admin):
     add(client, admin, label="Secret internal name")
     body = public(client).json()
-    assert set(body) == {"consent_required", "tags"} and set(body["tags"][0]) == {"provider", "id", "category", "events"}
+    assert set(body) == {"consent_required", "tags"} and set(body["tags"][0]) == {"provider", "id", "category", "events", "conversions"}
     assert "Secret" not in json.dumps(body) and "admin@brandslens.test" not in json.dumps(body)
 
 
@@ -183,3 +183,93 @@ def test_saved_links_are_listed_newest_first_and_can_be_deleted(client, admin):
     assert client.delete(f"/api/admin/utm-links/{first['id']}", headers=admin).json() == {"deleted": True}
     assert client.delete(f"/api/admin/utm-links/{first['id']}", headers=admin).status_code == 404
     assert [x["label"] for x in client.get("/api/admin/utm-links", headers=admin).json()["links"]] == ["second"]
+
+
+
+# ---------------------------------------------------------------- conversions, added with no deployment
+def gads(client, admin, scope="app"):
+    return client.post("/api/admin/tracking/tags", headers=admin, json={"provider": "google_tag", "tag_id": "AW-16962957208", "scope": scope}).json()
+
+
+def conv(client, admin, tag, **kw):
+    return client.post(f"/api/admin/tracking/tags/{tag['id']}/conversions", headers=admin, json=kw)
+
+
+def test_a_google_ads_trial_signup_conversion_is_added_and_published(client, admin):
+    tag = gads(client, admin)
+    r = conv(client, admin, tag, name="Trial signup", trigger="trial_signup", value="cVOXCJCfj7cdEJjfyJg_")
+    assert r.status_code == 200, r.text
+    assert [(c["trigger"], c["value"]) for c in r.json()["conversions"]] == [("trial_signup", "cVOXCJCfj7cdEJjfyJg_")]
+    published = public(client, "app").json()["tags"][0]
+    assert published["conversions"] == [{"on": "trial_signup", "value": "cVOXCJCfj7cdEJjfyJg_"}]
+
+
+def test_new_conversions_need_no_code_change_any_moment_or_page_is_accepted(client, admin):
+    tag = gads(client, admin)
+    for trig in ("purchase", "report_downloaded", "page:/dashboard", "page:/reports*", "PAGE_VIEWED_PRICING".lower()):
+        assert conv(client, admin, tag, trigger=trig, value="AbCdEfGh1234").status_code == 200, trig
+    assert len(public(client, "app").json()["tags"][0]["conversions"]) == 5
+
+
+def test_each_platform_checks_its_own_conversion_format(client, admin):
+    li = add(client, admin, "linkedin_insight", "1234567").json()
+    assert conv(client, admin, li, trigger="trial_signup", value="87654321").status_code == 200
+    assert conv(client, admin, li, trigger="trial_signup", value="cVOXCJCfj7cdEJjfyJg_").status_code == 422
+    meta = add(client, admin).json()
+    assert conv(client, admin, meta, trigger="trial_signup", value="StartTrial").status_code == 200
+    assert conv(client, admin, meta, trigger="trial_signup", value="fbq('x')").status_code == 422
+    snap = add(client, admin, "snap_pixel", "12345678-abcd-4abc-8abc-1234567890ab").json()
+    assert conv(client, admin, snap, trigger="trial_signup", value="SIGN_UP").status_code == 422
+
+
+@pytest.mark.parametrize("trig", ["", "Trial Signup!", "page:dashboard", "page:/x?y=<script>", "javascript:alert(1)"])
+def test_a_bad_trigger_is_refused(client, admin, trig):
+    assert conv(client, admin, gads(client, admin), trigger=trig, value="AbCdEfGh1234").status_code == 422
+
+
+def test_bad_labels_are_refused_and_labels_only_go_on_a_google_ads_id(client, admin):
+    tag = gads(client, admin)
+    assert conv(client, admin, tag, trigger="trial_signup", value="AW-1/<script>").status_code == 422
+    assert conv(client, admin, tag, trigger="trial_signup", value="short").status_code == 422
+    ga = client.post("/api/admin/tracking/tags", headers=admin, json={"provider": "google_tag", "tag_id": "G-ABC123XYZ9", "scope": "app"}).json()
+    r = conv(client, admin, ga, trigger="trial_signup", value="cVOXCJCfj7cdEJjfyJg_")
+    assert r.status_code == 422 and "AW-" in r.json()["detail"]
+
+
+def test_a_conversion_can_be_switched_off_changed_and_removed_and_goes_with_its_tag(client, admin, db):
+    tag = gads(client, admin)
+    cid = conv(client, admin, tag, trigger="trial_signup", value="cVOXCJCfj7cdEJjfyJg_").json()["conversions"][0]["id"]
+    assert conv(client, admin, tag, trigger="trial_signup", value="cVOXCJCfj7cdEJjfyJg_").status_code == 409
+    client.patch(f"/api/admin/tracking/conversions/{cid}", headers=admin, json={"enabled": False})
+    assert public(client, "app").json()["tags"][0]["conversions"] == []
+    r = client.patch(f"/api/admin/tracking/conversions/{cid}", headers=admin, json={"enabled": True, "trigger": "page:/dashboard"})
+    assert r.json()["conversions"][0]["trigger"] == "page:/dashboard"
+    assert client.patch(f"/api/admin/tracking/conversions/{cid}", headers=admin, json={"value": "bad label!"}).status_code == 422
+    assert client.delete(f"/api/admin/tracking/conversions/{cid}", headers=admin).json()["conversions"] == []
+    cid2 = conv(client, admin, tag, trigger="login", value="AbCdEfGh1234").json()["conversions"][0]["id"]
+    client.delete(f"/api/admin/tracking/tags/{tag['id']}", headers=admin)
+    assert db.get(TrackingConversion, cid2) is None
+
+
+def test_only_the_team_can_manage_conversions(client, db, admin):
+    tag = gads(client, admin)
+    _, token, _ = make_customer(db)
+    for method, path in (("POST", f"/api/admin/tracking/tags/{tag['id']}/conversions"), ("PATCH", "/api/admin/tracking/conversions/x"), ("DELETE", "/api/admin/tracking/conversions/x")):
+        assert client.request(method, path, headers=bearer(token), json={"trigger": "trial_signup", "value": "cVOXCJCfj7cdEJjfyJg_"}).status_code == 403
+        assert client.request(method, path, json={}).status_code == 401
+
+
+def test_a_conversion_edited_in_by_hand_is_never_published_if_malformed(client, admin, db):
+    tag = gads(client, admin)
+    db.add(TrackingConversion(tag_pk=tag["id"], trigger="trial_signup", value="x');alert(1)//"))
+    db.add(TrackingConversion(tag_pk=tag["id"], trigger="<img>", value="AbCdEfGh1234"))
+    db.add(TrackingConversion(tag_pk=tag["id"], trigger="trial_signup", value="cVOXCJCfj7cdEJjfyJg_"))
+    db.commit()
+    assert public(client, "app").json()["tags"][0]["conversions"] == [{"on": "trial_signup", "value": "cVOXCJCfj7cdEJjfyJg_"}]
+
+
+def test_the_screen_is_told_the_moments_and_each_platforms_conversion_format(client, admin):
+    body = client.get("/api/admin/tracking/tags", headers=admin).json()
+    assert {m["key"] for m in body["moments"]} >= {"trial_signup", "purchase", "login"}
+    by = {p["provider"]: p for p in body["providers"]}
+    assert by["google_tag"]["conversion"]["what"] == "Conversion label" and by["clarity"]["conversion"] is None

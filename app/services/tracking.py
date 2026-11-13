@@ -19,11 +19,13 @@ from urllib.parse import urlencode, urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import TrackingTag
+from ..models import TrackingConversion, TrackingTag
 from .promos import clean_tag
 
 SCOPES = ("marketing", "app", "both")
 _G_ID = re.compile(r"^(G-[A-Z0-9]{6,14}|AW-\d{6,14}|GT-[A-Z0-9]{4,14}|GTM-[A-Z0-9]{4,10})$")
+# A Google Ads conversion label: the part after the slash in send_to "AW-123456789/AbCdEfGh123". Letters, digits, _ and - only.
+_GADS_LABEL = re.compile(r"^[A-Za-z0-9_-]{8,40}$")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 PROVIDERS: dict[str, dict] = {
@@ -99,6 +101,72 @@ def validate(provider: str, tag_id, events: dict | None = None) -> tuple[str, st
     return clean, category_for(provider, clean), out
 
 
+# ---------------------------------------------------------------- conversions, with no deployment
+# WHEN: a moment the app reports, or a page. The app reports these moments today; a moment it does not know yet can still be saved
+# (so a later app release that starts reporting it needs no backend change), it simply never fires until then.
+MOMENTS: list[dict] = [
+    {"key": "trial_signup", "name": "Free trial account created"},
+    {"key": "purchase", "name": "Payment confirmed"},
+    {"key": "login", "name": "Signed in"},
+]
+_MOMENT = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
+_PAGE = re.compile(r"^page:/[A-Za-z0-9/_.\-]{0,100}\*?$")
+_EVENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,39}$")
+MAX_CONVERSIONS_PER_TAG = 30
+
+# WHAT: per platform, what a conversion reference looks like and where to find it. A platform not listed takes no conversions.
+CONVERSIONS: dict[str, dict] = {
+    "google_tag": {"what": "Conversion label", "pattern": _GADS_LABEL, "example": "cVOXCJCfj7cdEJjfyJg_", "needs_prefix": "AW-",
+                   "where": "Google Ads, Goals, Conversions, open the conversion, Tag setup, Install the tag yourself: in send_to: 'AW-123456789/LABEL' copy only the "
+                            "part after the slash. Only a Google Ads tag (AW-) takes conversion labels."},
+    "meta_pixel": {"what": "Event name", "pattern": _EVENT_NAME, "example": "Lead",
+                   "where": "A Meta standard event (Lead, CompleteRegistration, StartTrial, Subscribe, Purchase) or your own custom event name."},
+    "linkedin_insight": {"what": "Conversion ID", "pattern": re.compile(r"^\d{5,12}$"), "example": "12345678",
+                         "where": "LinkedIn Campaign Manager, Analyze, Conversion tracking, open the conversion: the ID in its event-specific snippet."},
+    "x_pixel": {"what": "Event ID", "pattern": re.compile(r"^tw-[a-z0-9]+-[a-z0-9]+$"), "example": "tw-o1abc-o1def",
+                "where": "X Ads, Tools, Events manager, open the event: the event ID (tw-…)."},
+    "tiktok_pixel": {"what": "Event name", "pattern": _EVENT_NAME, "example": "CompleteRegistration",
+                     "where": "A TikTok standard event (CompleteRegistration, SubmitForm, Subscribe, CompletePayment) or your own event name."},
+}
+
+
+def clean_trigger(value) -> str:
+    v = str(value or "").strip()
+    if v.startswith("page:"):
+        if not _PAGE.match(v):
+            raise TrackingError("A page must look like page:/dashboard (add * at the end to include every page under it, for example page:/reports*).")
+        return v
+    v = v.lower()
+    if not _MOMENT.match(v):
+        raise TrackingError("Choose when it fires: a moment such as trial_signup, or a page such as page:/dashboard.")
+    return v
+
+
+def validate_conversion(tag: TrackingTag, trigger, value) -> tuple[str, str]:
+    """(clean trigger, clean value), or TrackingError saying what a good one looks like."""
+    spec = CONVERSIONS.get(tag.provider)
+    if not spec:
+        raise TrackingError(f"{PROVIDERS.get(tag.provider, {}).get('name', tag.provider)} does not take conversions here. Use the platform's own events manager, or Google Tag Manager.")
+    if spec.get("needs_prefix") and not str(tag.tag_id).startswith(spec["needs_prefix"]):
+        raise TrackingError(f"Conversions go on the Google Ads tag ({spec['needs_prefix']}…), not on {tag.tag_id}. Add the Google Ads tag first.")
+    trig = clean_trigger(trigger)
+    v = str(value or "").strip()
+    if tag.provider == "x_pixel":
+        v = v.lower()
+    if not spec["pattern"].match(v):
+        raise TrackingError(f"That does not look like a {spec['what'].lower()}. It should look like {spec['example']}. {spec['where']}")
+    return trig, v
+
+
+def conversion_dict(c: TrackingConversion) -> dict:
+    return {"id": c.id, "name": c.name, "trigger": c.trigger, "value": c.value, "enabled": bool(c.enabled),
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None, "updated_by": c.updated_by}
+
+
+def conversions_of(db: Session, tag_pk: str) -> list[TrackingConversion]:
+    return list(db.scalars(select(TrackingConversion).where(TrackingConversion.tag_pk == tag_pk).order_by(TrackingConversion.created_at)).all())
+
+
 def _events_of(t: TrackingTag) -> dict:
     try:
         return json.loads(t.events) if t.events else {}
@@ -106,11 +174,12 @@ def _events_of(t: TrackingTag) -> dict:
         return {}
 
 
-def tag_dict(t: TrackingTag) -> dict:
+def tag_dict(t: TrackingTag, db: Session | None = None) -> dict:
     spec = PROVIDERS.get(t.provider, {})
+    convs = [conversion_dict(c) for c in conversions_of(db, t.id)] if db is not None else []
     return {"id": t.id, "provider": t.provider, "provider_name": spec.get("name", t.provider), "label": t.label, "tag_id": t.tag_id, "scope": t.scope,
             "category": category_for(t.provider, t.tag_id), "enabled": bool(t.enabled), "events": _events_of(t),
-            "updated_at": t.updated_at.isoformat() if t.updated_at else None, "updated_by": t.updated_by}
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None, "updated_by": t.updated_by, "conversions": convs}
 
 
 def public_config(db: Session, scope: str) -> dict:
@@ -127,7 +196,20 @@ def public_config(db: Session, scope: str) -> dict:
             clean, category, _ = validate(t.provider, t.tag_id)      # checked again here: a row edited by hand in the database is never published if its ID is malformed
         except TrackingError:
             continue
-        tags.append({"provider": t.provider, "id": clean, "category": category, "events": _events_of(t)})
+        try:
+            _, _, events = validate(t.provider, clean, _events_of(t))   # conversion IDs are checked again too; a bad one is dropped, the tag itself still loads
+        except TrackingError:
+            events = {}
+        conversions = []
+        for c in conversions_of(db, t.id):
+            if not c.enabled:
+                continue
+            try:                                                                  # checked again, so a row edited by hand is never published
+                trig, val = validate_conversion(TrackingTag(provider=t.provider, tag_id=clean), c.trigger, c.value)
+            except TrackingError:
+                continue
+            conversions.append({"on": trig, "value": val})
+        tags.append({"provider": t.provider, "id": clean, "category": category, "events": events, "conversions": conversions})
     return {"consent_required": True, "tags": tags}
 
 
