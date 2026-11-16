@@ -50,6 +50,8 @@ from .routes_guides import router as guides_router  # noqa: E402
 from .routes_trial import router as trial_router  # noqa: E402
 app.include_router(guides_router)
 app.include_router(trial_router)
+from .routes_brand_check import router as brand_check_router  # noqa: E402
+app.include_router(brand_check_router)
 log = logging.getLogger("main")
 # CORS deliberately does NOT rely solely on FRONTEND_ORIGIN — that variable
 # is also used elsewhere for a different purpose (the "back to homepage"

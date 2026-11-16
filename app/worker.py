@@ -133,6 +133,18 @@ def trial_lifecycle() -> None:
         db.close()
 
 
+def brand_checks() -> None:
+    """Runs waiting free brand checks from the website, one at a time per run (each takes a few minutes)."""
+    from .services import brand_check
+    db = SessionLocal()
+    try:
+        brand_check.process_queue(db, limit=1)
+    except Exception:  # noqa: BLE001 - must never stop the scheduler
+        log.exception("Brand check run failed")
+    finally:
+        db.close()
+
+
 def check_subscription_expiry() -> None:
     db = SessionLocal()
     try:
@@ -154,6 +166,11 @@ def start_background_loops() -> None:
     threading.Thread(target=lambda: asyncio.run(tipline_bot.start()), daemon=True, name="tipline").start()
 
 
+def _os_env(name: str, default: str) -> str:
+    import os
+    return os.environ.get(name, default)
+
+
 def main() -> None:
     init_db()
     sched = BackgroundScheduler(timezone=TIMEZONE)
@@ -169,6 +186,9 @@ def main() -> None:
     sched.add_job(verify_stale_subscriptions, "interval", minutes=CADENCE_SUBSCRIPTION_VERIFY, id="subscription-verify")
     sched.add_job(check_subscription_expiry, "interval", minutes=CADENCE_EXPIRY_CHECK, id="expiry-check")
     sched.add_job(trial_lifecycle, "interval", minutes=15, id="trial-lifecycle")
+    # Free brand checks: looked for every 10 seconds; up to BRAND_CHECK_PARALLEL run side by side (default 2)
+    sched.add_job(brand_checks, "interval", seconds=10, id="brand-checks",
+                  max_instances=max(1, min(4, int(_os_env("BRAND_CHECK_PARALLEL", "2") or 2))), coalesce=False)
     import os as _os
     sched.add_job(refresh_demo, "interval", hours=max(1, int(_os.environ.get("DEMO_RESET_HOURS", "3") or 3)), id="demo-refresh")
     sched.start()

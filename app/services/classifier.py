@@ -14,9 +14,7 @@ tool. Classify each item:
 
 Severity:
 - HIGH: fraud, scams, impersonation, phishing/look-alike domains, solicitation of \
-payments or personal data (bank logins, card details, national ID or tax numbers such as \
-SSN, National Insurance, SIN, BVN, NIN), coordinated attacks, verified crises. \
-Judge items in whatever language they are written in.
+payments or personal data (BVN, NIN, cards), coordinated attacks, verified crises.
 - MEDIUM: premature disclosure of non-public info, misinformation gaining traction, \
 credible negative claims from identifiable sources.
 - WATCH: general sentiment, opinion, speculation, positive coverage. Most items are WATCH.

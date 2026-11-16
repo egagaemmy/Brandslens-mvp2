@@ -761,3 +761,39 @@ class TrialEmail(Base):
     step_key: Mapped[str] = mapped_column(String(40))
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     skipped: Mapped[bool] = mapped_column(Boolean, default=False)       # recorded but not sent (not consented, or an earlier step overtaken by a later one)
+
+
+class BrandCheck(Base):
+    """One free Brand Exposure Check from the website: a visitor's brand, website and work email, the public results we found, and
+    the campaign that brought them. It is a lead record as well as a result. A new table, so it is created automatically at start up.
+    `token` is a random secret handed only to the visitor who asked: the results page needs it, so nobody can read another check by
+    guessing ids."""
+    __tablename__ = "brand_checks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    token: Mapped[str] = mapped_column(String(48), default=new_token, index=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    email_domain: Mapped[str] = mapped_column(String(200), index=True)
+    brand: Mapped[str] = mapped_column(String(120))
+    website: Mapped[str] = mapped_column(String(253), index=True)
+    status: Mapped[str] = mapped_column(String(12), default="queued", index=True)     # queued | running | done | failed
+    news_done: Mapped[bool] = mapped_column(Boolean, default=False)                  # the news part is shown before the slower website part finishes
+    news: Mapped[list] = mapped_column(JSON, default=list)                           # [{title, url, source, date, severity}]
+    domains: Mapped[list] = mapped_column(JSON, default=list)                        # [{domain}]
+    news_total: Mapped[int] = mapped_column(Integer, default=0)
+    news_attention: Mapped[int] = mapped_column(Integer, default=0)                  # rated HIGH or MEDIUM
+    domains_total: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    cached_from: Mapped[str] = mapped_column(String(36), default="")                 # reused a recent check of the same brand and website
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    utm_source: Mapped[str] = mapped_column(String(80), default="")
+    utm_medium: Mapped[str] = mapped_column(String(80), default="")
+    utm_campaign: Mapped[str] = mapped_column(String(80), default="")
+    utm_term: Mapped[str] = mapped_column(String(80), default="")
+    utm_content: Mapped[str] = mapped_column(String(80), default="")
+    session_id: Mapped[str] = mapped_column(String(64), default="")
+    ip_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    emailed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
