@@ -103,3 +103,14 @@ def admin_export(member: OrgMember = Depends(current_member), db: Session = Depe
     _admin(member, db)
     return Response(brand_check.export_csv(db), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="brandslens-brand-checks.csv"', "Cache-Control": "no-store"})
+
+
+@router.get("/api/admin/scorecard")
+def admin_scorecard(member: OrgMember = Depends(current_member), db: Session = Depends(get_db)) -> dict:
+    """Read only preview of the weekly scorecard email for the last full week: the figures, the accuracy checks, and the email as it
+    would be sent, plus who receives it. Sends nothing and changes nothing."""
+    _admin(member, db)
+    from .services import scorecard
+    card = scorecard.build(db)
+    subject, body = scorecard.render(card)
+    return {"scorecard": card, "subject": subject, "html": body, "recipients": scorecard.recipients()}

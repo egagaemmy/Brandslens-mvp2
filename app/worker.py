@@ -145,6 +145,19 @@ def brand_checks() -> None:
         db.close()
 
 
+def weekly_scorecard() -> None:
+    """Emails last week's growth scorecard on Monday morning (Lagos time). Checked hourly, so a restart at 09:00 never skips it,
+    and each week is sent only once."""
+    from .services import scorecard
+    db = SessionLocal()
+    try:
+        scorecard.send_if_due(db)
+    except Exception:  # noqa: BLE001 - must never stop the scheduler
+        log.exception("Weekly scorecard failed")
+    finally:
+        db.close()
+
+
 def check_subscription_expiry() -> None:
     db = SessionLocal()
     try:
@@ -189,6 +202,7 @@ def main() -> None:
     # Free brand checks: looked for every 10 seconds; up to BRAND_CHECK_PARALLEL run side by side (default 2)
     sched.add_job(brand_checks, "interval", seconds=10, id="brand-checks",
                   max_instances=max(1, min(4, int(_os_env("BRAND_CHECK_PARALLEL", "2") or 2))), coalesce=False)
+    sched.add_job(weekly_scorecard, "interval", minutes=60, id="weekly-scorecard")
     import os as _os
     sched.add_job(refresh_demo, "interval", hours=max(1, int(_os.environ.get("DEMO_RESET_HOURS", "3") or 3)), id="demo-refresh")
     sched.start()
